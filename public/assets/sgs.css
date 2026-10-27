@@ -1,0 +1,57 @@
+/* Solid Gold Systems - shared styles for the intake form and the Tracker */
+:root{
+  --black:#080808; --panel:#101010; --card:#141414; --raise:#1A1A1A; --line:rgba(255,255,255,.09);
+  --gold:#F5D85A; --gold-dim:#C9A800; --gold-soft:rgba(245,216,90,.12); --gold-line:rgba(245,216,90,.28);
+  --text:#FFFFFF; --muted:rgba(255,255,255,.66); --faint:rgba(255,255,255,.42);
+  --ok:#5BD08A; --warn:#F2A65A; --bad:#F06B6B;
+  --display:'Bebas Neue',sans-serif; --body:'DM Sans',system-ui,sans-serif; --serif:'DM Serif Display',serif;
+  --r:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--black);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.5;min-height:100vh}
+a{color:var(--gold)}
+img{max-width:100%;display:block}
+button{font:inherit;color:inherit;cursor:pointer}
+input,textarea,select{font:inherit;color:var(--text)}
+.hidden{display:none!important}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+/* ---------- form controls ---------- */
+.fld{display:flex;flex-direction:column;gap:6px;min-width:0}
+.fld label,.fld .lbl{font-size:13px;font-weight:600;color:var(--text)}
+.fld .opt{font-weight:400;color:var(--faint);margin-left:4px}
+.fld .req{color:var(--gold);margin-left:2px}
+.fld .hint{font-size:12px;color:var(--faint)}
+.inp{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;outline:none;transition:border-color .15s,background .15s}
+.inp::placeholder{color:rgba(255,255,255,.3)}
+.inp:focus{border-color:var(--gold-line);background:#171717}
+textarea.inp{resize:vertical;min-height:84px}
+.fld.err .inp,.fld.err .chips{border-color:var(--bad)}
+.fld .errmsg{display:none;font-size:12px;color:var(--bad)}
+.fld.err .errmsg{display:block}
+.chips{display:flex;flex-wrap:wrap;gap:8px;border:1px solid transparent;border-radius:8px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:14px;transition:all .15s}
+.chip:hover{border-color:var(--gold-line)}
+.chip[aria-pressed="true"]{background:var(--gold-soft);border-color:var(--gold);color:var(--gold)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);background:var(--raise);border-radius:8px;padding:10px 16px;font-weight:600;font-size:14px;text-decoration:none;color:var(--text);transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--gold-line)}
+.btn.gold{background:var(--gold);color:#111;border-color:var(--gold)}
+.btn.gold:hover{background:#FFE680}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--bad)}
+.btn.sm{padding:6px 10px;font-size:13px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ---------- uploader ---------- */
+.drop{border:1px dashed rgba(255,255,255,.2);border-radius:var(--r);background:var(--card);padding:22px 16px;text-align:center;cursor:pointer;transition:all .15s}
+.drop:hover,.drop.over{border-color:var(--gold);background:#171717}
+.drop strong{display:block;font-size:14px}
+.drop span{font-size:12px;color:var(--faint)}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;margin-top:10px}
+.thumb{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:var(--raise);border:1px solid var(--line)}
+.thumb img,.thumb video{width:100%;height:100%;object-fit:cover}
+.thumb .fname{position:absolute;inset:auto 0 0 0;padding:4px 6px;font-size:10px;background:rgba(0,0,0,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.thumb .doc{display:flex;align-items:center;justify-content:center;height:100%;font-size:12px;color:var(--muted);padding:6px;text-align:center;word-break:break-all}
+.thumb .x{position:absolute;top:4px;right:4px;width:24px;height:24px;border-radius:50%;border:0;background:rgba(0,0,0,.75);color:#fff;font-size:15px;line-height:1}

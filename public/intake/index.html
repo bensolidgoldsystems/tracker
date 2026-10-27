@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Website Intake Form | Solid Gold Systems</title>
+<meta name="description" content="Send us your info, photos and logo so we can design, write and launch your website.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#080808">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/sgs.css">
+<style>
+.topbar{background:var(--gold);color:#111;text-align:center;font-size:13px;font-weight:500;padding:8px 16px}
+.topbar b{background:#111;color:var(--gold);border-radius:4px;padding:2px 7px;font-size:10px;letter-spacing:.12em;margin-right:8px}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:16px clamp(16px,4vw,48px);border-bottom:1px solid var(--line)}
+.nav img{height:44px;width:auto}
+.nav a.site{font-size:11px;letter-spacing:.14em;color:var(--gold);text-decoration:none;border:1px solid var(--gold-line);padding:9px 14px;border-radius:6px}
+.hero{position:relative;overflow:hidden;padding:56px clamp(16px,4vw,48px) 40px;background:radial-gradient(ellipse at 85% 40%,rgba(245,216,90,.12),transparent 55%)}
+.hero-in{max-width:880px;margin:0 auto;position:relative}
+.eyebrow{font-size:11px;letter-spacing:.2em;color:var(--gold);font-weight:600}
+.hero h1{font-family:var(--display);font-weight:400;font-size:clamp(52px,9vw,96px);line-height:.9;margin:14px 0 16px;letter-spacing:.01em}
+.hero h1 em{display:block;font-family:var(--serif);font-style:italic;color:var(--gold);letter-spacing:0}
+.hero p{max-width:520px;color:var(--muted)}
+.hero p b{color:var(--text)}
+.meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--faint)}
+.meta span:first-child{color:var(--gold)}
+.coin{position:absolute;right:-10px;top:50%;transform:translateY(-50%);width:min(30vw,250px);mix-blend-mode:lighten;pointer-events:none}
+.progress{position:sticky;top:0;z-index:20;background:rgba(8,8,8,.92);backdrop-filter:blur(8px);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px clamp(16px,4vw,48px)}
+.progress-in{max-width:880px;margin:0 auto;display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted)}
+.bar{flex:1;height:4px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--gold);transition:width .3s}
+main{max-width:880px;margin:0 auto;padding:28px 16px 64px}
+.sec{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:clamp(18px,4vw,32px);margin-bottom:22px}
+.sec h2{font-family:var(--display);font-weight:400;font-size:30px;letter-spacing:.02em;line-height:1}
+.sec h2 span{font-family:var(--serif);color:var(--gold);font-size:24px;margin-right:10px}
+.sec .sub{color:var(--muted);font-size:14px;margin:6px 0 22px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 18px}
+.grid > .full{grid-column:1/-1}
+.note{grid-column:1/-1;display:flex;gap:10px;align-items:flex-start;background:var(--gold-soft);border:1px solid var(--gold-line);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--muted)}
+.note b{color:var(--gold)}
+.checkrow{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;width:max-content;max-width:100%}
+.checkrow input{accent-color:var(--gold);width:18px;height:18px}
+.submit{text-align:center;margin-top:30px}
+.submit .btn{font-size:14px;letter-spacing:.14em;padding:18px 44px;text-transform:uppercase}
+.submit p{font-size:12px;color:var(--faint);margin-top:12px}
+.formerr{color:var(--bad);font-size:14px;margin-top:12px}
+footer{border-top:1px solid var(--line);padding:28px 16px;text-align:center;font-size:12px;color:var(--faint)}
+.hp{position:absolute;left:-9999px}
+.overlay{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.86);display:flex;align-items:center;justify-content:center;padding:20px}
+.overlay-card{background:var(--panel);border:1px solid var(--gold-line);border-radius:14px;padding:32px;max-width:440px;width:100%;text-align:center}
+.overlay-card h3{font-family:var(--display);font-weight:400;font-size:32px;letter-spacing:.02em}
+.overlay-card p{color:var(--muted);font-size:14px;margin:8px 0 18px}
+.overlay-card .bar{height:8px}
+.done{max-width:640px;margin:60px auto;text-align:center;padding:0 16px}
+.done h2{font-family:var(--display);font-weight:400;font-size:clamp(44px,8vw,72px);line-height:.95}
+.done h2 em{font-family:var(--serif);color:var(--gold)}
+.done p{color:var(--muted);margin-top:14px}
+@media (max-width:640px){
+  .grid{grid-template-columns:1fr}
+  .coin{opacity:.35;width:150px;right:-30px;top:30%}
+  .nav a.site{display:none}
+}
+</style>
+</head>
+<body>
+<div class="topbar"><b>STEP 2</b>Send us your info, and we'll start building your site.</div>
+<header class="nav">
+  <a href="https://solidgoldsystems.com" aria-label="Solid Gold Systems"><img src="/assets/logo.png" alt="Solid Gold Systems" width="135" height="44"></a>
+  <a class="site" href="https://solidgoldsystems.com">SOLIDGOLDSYSTEMS.COM</a>
+</header>
+
+<div id="formView">
+  <section class="hero">
+    <div class="hero-in">
+      <div class="eyebrow">WEBSITE INTAKE FORM</div>
+      <h1>Let's Build Your <em>Website.</em></h1>
+      <p>Fill this out once and we'll have everything we need to design, write and launch your site. <b>Don't have something yet? Skip it,</b> and we'll cover it on our call.</p>
+      <div class="meta"><span>~10 min to complete</span><span>Fields marked * are required</span><span>Your answers save as you go</span></div>
+    </div>
+    <img class="coin" src="/assets/coin-poster-v2.webp" alt="" width="250" height="250">
+  </section>
+
+  <div class="progress" aria-hidden="true">
+    <div class="progress-in"><span id="pctLabel">0% complete</span><div class="bar"><i id="pctBar"></i></div></div>
+  </div>
+
+  <main>
+    <form id="intake" novalidate>
+      <p class="hp"><label>Leave empty <input name="company_site" tabindex="-1" autocomplete="off"></label></p>
+      <div id="sections"></div>
+      <div class="submit">
+        <button type="submit" class="btn gold" id="submitBtn">Send to Solid Gold Systems</button>
+        <div class="formerr hidden" id="formErr" role="alert"></div>
+        <p>Your info is only used to build your website.</p>
+      </div>
+    </form>
+  </main>
+</div>
+
+<div id="doneView" class="done hidden">
+  <h2>Got it. <em>We're building.</em></h2>
+  <p>Thanks! Everything came through. We'll start designing your site and show you the draft on our call.</p>
+  <p id="doneWarn" class="hidden" style="color:var(--warn)"></p>
+</div>
+
+<div class="overlay hidden" id="overlay" role="dialog" aria-modal="true" aria-labelledby="ovTitle">
+  <div class="overlay-card">
+    <h3 id="ovTitle">Sending your info</h3>
+    <p id="ovText">Saving your answers...</p>
+    <div class="bar"><i id="ovBar"></i></div>
+    <p style="margin:14px 0 0;font-size:12px">Keep this page open until it finishes.</p>
+  </div>
+</div>
+
+<footer>Solid Gold Systems · Huntington, NY · <a href="https://solidgoldsystems.com">solidgoldsystems.com</a></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="/assets/config.js"></script>
+<script src="/assets/schema.js"></script>
+<script src="/assets/intake.js"></script>
+</body>
+</html>

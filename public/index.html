@@ -1,1 +1,72 @@
-<!doctype html><meta charset="utf-8"><title>SGS Tracker</title><p>SGS Tracker: setting up.</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SGS Tracker</title>
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#080808">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/sgs.css">
+<link rel="stylesheet" href="/assets/tracker.css">
+</head>
+<body>
+
+<!-- Sign in -->
+<div id="authView" class="auth hidden">
+  <div class="auth-card">
+    <img src="/assets/logo.png" alt="Solid Gold Systems" width="150" height="49">
+    <h1>Tracker</h1>
+    <form id="loginForm" novalidate>
+      <div class="fld"><label for="loginEmail">Email</label><input class="inp" id="loginEmail" type="email" autocomplete="username" required></div>
+      <div class="fld"><label for="loginPass">Password</label><input class="inp" id="loginPass" type="password" autocomplete="current-password" required></div>
+      <button class="btn gold" type="submit">Sign in</button>
+      <button class="linkbtn" type="button" id="forgotBtn">Forgot password?</button>
+    </form>
+    <form id="resetForm" class="hidden" novalidate>
+      <p class="muted">Choose a new password.</p>
+      <div class="fld"><label for="newPass">New password</label><input class="inp" id="newPass" type="password" autocomplete="new-password" minlength="8" required></div>
+      <button class="btn gold" type="submit">Save password</button>
+    </form>
+    <p class="authmsg" id="authMsg" role="status"></p>
+  </div>
+</div>
+
+<!-- App -->
+<div id="appView" class="hidden">
+  <header class="top">
+    <a href="#" class="brand" aria-label="Tracker home"><img src="/assets/logo.png" alt="Solid Gold Systems" width="110" height="36"><span>Tracker</span></a>
+    <div class="top-actions">
+      <button class="btn sm" id="copyIntake" title="Copy the intake form link to send to a lead">Copy intake link</button>
+      <button class="btn sm" id="newLead">+ New lead</button>
+      <button class="btn sm ghost" id="signOut">Sign out</button>
+    </div>
+  </header>
+
+  <section id="boardView">
+    <div class="board-bar">
+      <input class="inp search" id="search" type="search" placeholder="Search business, name, email..." aria-label="Search leads">
+      <button class="btn sm ghost" id="refresh">Refresh</button>
+    </div>
+    <div class="board" id="board"></div>
+  </section>
+
+  <section id="leadView" class="hidden"></section>
+</div>
+
+<div class="toast hidden" id="toast" role="status"></div>
+<div class="modal hidden" id="modal" role="dialog" aria-modal="true"><div class="modal-card" id="modalCard"></div></div>
+<div class="viewer hidden" id="viewer" role="dialog" aria-modal="true" aria-label="File preview"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="/assets/config.js"></script>
+<script src="/assets/schema.js"></script>
+<script src="/assets/tracker.js"></script>
+</body>
+</html>
