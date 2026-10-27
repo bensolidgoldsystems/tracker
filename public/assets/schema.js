@@ -6,6 +6,19 @@
 
   var SECTIONS = [
     {
+      /* Answers from the short form on websites.solidgoldsystems.com.
+         internal: shown in the Tracker and export, never rendered in the intake form. */
+      id: "booking", num: "00", title: "Booking Form", internal: true, sub: "Their answers to the short form before booking.",
+      fields: [
+        { id: "lp_industry", label: "Type of business", type: "text", half: true },
+        { id: "lp_website_status", label: "Current website", type: "text", half: true },
+        { id: "lp_logo_need", label: "Logo need", type: "text", half: true },
+        { id: "lp_website_url", label: "Existing website", type: "url", half: true },
+        { id: "lp_business_description", label: "What the business does", type: "textarea" },
+        { id: "lp_key_offerings", label: "Key offerings to showcase", type: "textarea" }
+      ]
+    },
+    {
       id: "business", num: "01", title: "Your Business", sub: "The basics that go on your site.",
       fields: [
         { id: "business_name", label: "Business name", type: "text", req: true, auto: "organization" },

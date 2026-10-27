@@ -7,7 +7,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var leads = [];
   var current = null;      // { lead, files, urls }
-  var INTAKE_URL = location.origin + "/intake/";
+  var INTAKE_URL = "https://websites.solidgoldsystems.com/intake/";
 
   /* ---------- utils ---------- */
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
@@ -226,7 +226,10 @@
   }
 
   function answersPanels(a) {
-    return S.SECTIONS.map(function (sec) {
+    return S.SECTIONS.filter(function (sec) {
+      // the short-form section only shows when the lead came through websites.solidgoldsystems.com
+      return !sec.internal || sec.fields.some(function (f) { return a[f.id]; });
+    }).map(function (sec) {
       var rows = sec.fields.filter(function (f) { return f.type !== "note" && f.type !== "files"; }).map(function (f) {
         var v = a[f.id];
         var txt = Array.isArray(v) ? v.join(", ") : v === true ? "Yes" : (v || "");

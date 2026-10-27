@@ -2,34 +2,33 @@
 
 Internal tool for Solid Gold Systems website leads: **tracker.solidgoldsystems.com**
 
-- `/intake/` — public website intake form sent to leads after they book. Photos upload at full quality straight to Supabase Storage.
-- `/` — the Tracker (login required): 4-stage board, lead details, files, build checklist, notes, and **Export build kit (.zip)**.
+Internal only (login required): 4-stage board, lead details, files, build checklist, notes, and **Export build kit (.zip)**.
+
+Leads come from the detailed intake form on **websites.solidgoldsystems.com** (shown after someone books a call, plus a standalone copy at `/intake/`). That site's Netlify functions write the lead and files into Supabase; this app only reads and manages them.
 
 ## How it fits together
 
 | Piece | Where |
 |---|---|
-| Code | This repo; every push to `main` auto-deploys on Netlify (`solidgoldtracker`) |
+| Code | This repo; every push to `main` auto-deploys on Netlify (`solidgoldtracker`) — push only when a change is ready, each deploy uses Netlify credits |
+| Intake form + functions | websites.solidgoldsystems.com (separate Netlify site, drag-and-drop zip) |
 | Data + files | Supabase project `sgs-tracker` (tables `leads`, `lead_files`, `team_members`; private bucket `intake`) |
-| CRM | Intake submissions update the GHL contact and add the tag `website-intake-complete` |
+| CRM | Intake submissions (from the websites site) update the GHL contact and add the tag `website-intake-complete` |
 
 ## Files
 
 ```
 public/index.html            Tracker app
-public/intake/index.html     Intake form
-public/assets/schema.js      THE list of questions, file types, checklist and stages (edit here)
-public/assets/intake.js      Intake form logic
+public/assets/schema.js      THE list of questions, file types, checklist and stages
 public/assets/tracker.js     Tracker logic
 public/assets/config.js      Public Supabase URL + anon key
-netlify/functions/intake-start.js     Saves answers, returns signed upload URLs
-netlify/functions/intake-complete.js  Records uploaded files, pushes to GHL
-netlify/lib/shared.js        Supabase + GHL helpers
 ```
+
+`schema.js` is also used by the intake form on the websites site (`assets/intake/schema.js`). Keep the two copies identical: change a question in one, copy it to the other.
 
 ## Netlify environment variables
 
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GHL_TOKEN`, `GHL_LOCATION_ID` (optional `TRACKER_URL`).
+None needed for this site (it has no server functions). The websites site holds `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GHL_TOKEN`, `GHL_LOCATION_ID`.
 
 ## Giving someone access
 
@@ -39,5 +38,5 @@ netlify/lib/shared.js        Supabase + GHL helpers
 ## Intake link for GHL texts/emails
 
 ```
-https://tracker.solidgoldsystems.com/intake/?name={{contact.name}}&email={{contact.email}}&phone={{contact.phone}}&business={{contact.company_name}}&cid={{contact.id}}
+https://websites.solidgoldsystems.com/intake/?name={{contact.name}}&email={{contact.email}}&phone={{contact.phone}}&business={{contact.company_name}}&cid={{contact.id}}
 ```
