@@ -123,7 +123,8 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
   }
   // Billing events we couldn't read: surface one so the format can be fixed (shows in Settings).
   const billing = events.filter((e) => e.event_type === "ad_account_billing_charge");
-  if (billing.length && !rows.length && !csvCut) {
+  const newer = billing.filter((e) => !csvCut || nyDate(e.event_time) > csvCut);
+  if (newer.length && !rows.length) {
     throw new Error("Couldn't read billing charges; sample: " + JSON.stringify(billing[0].extra_data).slice(0, 300));
   }
   if (!rows.length) return 0;
@@ -231,6 +232,15 @@ Deno.serve(async (req) => {
   let body: any = {};
   try { body = await req.json(); } catch (_) { /* empty */ }
 
+  // Read-only check: billing charges Meta reports for one account since a date (nothing is saved).
+  if (body.action === "charges_preview" && /^\d+$/.test(String(body.account || ""))) {
+    const t = Deno.env.get("META_ACCESS_TOKEN") || "";
+    const ev = await graphAll("/act_" + body.account + "/activities", {
+      fields: "event_time,event_type,extra_data", since: String(body.since || FIRST_DAY), until: ymd(new Date()), limit: "500",
+    }, t);
+    const billing = ev.filter((e) => e.event_type === "ad_account_billing_charge");
+    return json(req, 200, { events: ev.length, types: [...new Set(ev.map((e) => e.event_type))], billing: billing.slice(0, 40) });
+  }
   if (body.action === "status") {
     return json(req, 200, { configured: !!Deno.env.get("META_ACCESS_TOKEN") });
   }
