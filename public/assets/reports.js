@@ -1,0 +1,564 @@
+/* Solid Gold Systems Tracker - Money: Overview, Reports (the bookkeeping sheet), Meta.
+   Every amount lives in public.money_entries (one row per amount in a month).
+   Ad spend = Meta charges on our cards (imported billing reports) plus, after the last
+   imported charge for an account, daily spend synced from the Meta API (public.meta_daily).
+   tracker.js calls SGSReports.init(helpers), then:
+     SGSReports.overview(el)        #overview (home)
+     SGSReports.reports(el, hash)   #reports, #reports/2026
+     SGSReports.metaSettings(el)    Settings page
+     SGSReports.clientPanel(el, c)  money panel on a client page */
+(function () {
+  "use strict";
+  var T = null;
+  var M3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var CAT = {
+    revenue: "Revenue", per_lead: "Pay per lead", ad_spend: "Ad spend (our cards)",
+    ad_reimbursement: "Ad spend reimbursed", partner_payout: "Partner payout"
+  };
+  var SOURCE = { manual: "Added in Tracker", sheet: "Bookkeeping sheet", meta_csv: "Meta billing report", meta_api: "Meta (synced)", stripe: "Stripe" };
+  var STATUS_LABEL = { onboarding: "Onboarding", active: "Active", paused: "Paused", churned: "Churned" };
+  var d = null;   // loaded data
+
+  /* ---------- helpers ---------- */
+  function esc(s) { return T.esc(s); }
+  function $(id) { return document.getElementById(id); }
+  function money(n, opts) {
+    opts = opts || {};
+    var v = Number(n || 0);
+    if (!v && opts.blank) { return ""; }
+    var frac = Math.round(Math.abs(v) * 100) % 100 !== 0;
+    var s = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: frac ? 2 : 0, maximumFractionDigits: frac ? 2 : 0 });
+    return (v < 0 ? "-$" : "$") + s;
+  }
+  function ym(dateStr) { return String(dateStr).slice(0, 7); }               // "2026-10"
+  function monthKey(y, m) { return y + "-" + String(m + 1).padStart(2, "0"); } // m: 0-11
+  function todayStr() { var t = new Date(); return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); }
+  function monthLong(key) { var p = key.split("-"); return new Date(+p[0], +p[1] - 1, 15).toLocaleDateString("en-US", { month: "long", year: "numeric" }); }
+  function dateShort(s) { return s ? new Date(s + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""; }
+  async function q(promise) { var r = await promise; if (r.error) { throw r.error; } return r.data; }
+  // PostgREST returns at most 1,000 rows per request: page through.
+  async function all(make) {
+    var out = [], size = 1000;
+    for (var from = 0; from < 100000; from += size) {
+      var rows = await q(make().range(from, from + size - 1));
+      out = out.concat(rows);
+      if (rows.length < size) { break; }
+    }
+    return out;
+  }
+  function byId(list, id) { for (var i = 0; i < list.length; i++) { if (list[i].id === id) { return list[i]; } } return null; }
+  function weFront(c) { return /^sgs_/.test(c.ad_spend_mode || ""); }
+
+  // Same rule as the Clients page: Active/Paused follow the ads switch once its dates arrive.
+  function statusOf(c) {
+    if (c.status !== "active" && c.status !== "paused") { return c.status; }
+    var t = todayStr();
+    var ev = d.events.filter(function (e) { return e.client_id === c.id && e.kind !== "note" && e.event_date <= t; })
+      .sort(function (a, b) { return a.event_date < b.event_date ? 1 : a.event_date > b.event_date ? -1 : (a.created_at < b.created_at ? 1 : -1); });
+    if (!ev.length) { return c.status; }
+    return ev[0].kind === "launched" || ev[0].kind === "relaunched" ? "active" : "paused";
+  }
+  function statusBadge(st) {
+    var cls = st === "active" ? "ok" : st === "onboarding" ? "gold" : st === "paused" ? "warn" : "";
+    return '<span class="badge ' + cls + '">' + esc(STATUS_LABEL[st] || st) + "</span>";
+  }
+
+  /* ---------- data ---------- */
+  async function load() {
+    var res = await Promise.all([
+      q(T.sb.from("clients").select("*").order("business_name")),
+      q(T.sb.from("partners").select("*").order("name")),
+      q(T.sb.from("client_services").select("*")),
+      q(T.sb.from("services").select("id,name")),
+      q(T.sb.from("ad_events").select("client_id,kind,event_date,created_at")),
+      all(function () { return T.sb.from("money_entries").select("*").order("entry_date", { ascending: true, nullsFirst: true }).order("id"); }),
+      all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
+      q(T.sb.from("meta_ad_accounts").select("*").order("name")),
+      q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5))
+    ]);
+    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8] };
+    index();
+    return d;
+  }
+
+  // Precompute per client per month: sums by category, synced spend and leads.
+  function index() {
+    var cell = {};              // cell[clientId][ym][cat] = sum
+    function add(cid, key, cat, v) {
+      cid = cid || "none";
+      cell[cid] = cell[cid] || {}; cell[cid][key] = cell[cid][key] || {};
+      cell[cid][key][cat] = (cell[cid][key][cat] || 0) + v;
+    }
+    // Last imported Meta charge per ad account: synced spend counts only after it.
+    var cutoff = {};
+    d.entries.forEach(function (e) {
+      add(e.client_id, ym(e.month), e.category, Number(e.amount));
+      if (e.source === "meta_csv" && e.ad_account_id && e.entry_date && (!cutoff[e.ad_account_id] || e.entry_date > cutoff[e.ad_account_id])) {
+        cutoff[e.ad_account_id] = e.entry_date;
+      }
+    });
+    var acctClient = {};
+    d.clients.forEach(function (c) { (c.meta_ad_account_ids || []).forEach(function (a) { acctClient[a] = c; }); });
+    d.daily.forEach(function (r) {
+      var c = acctClient[r.ad_account_id];
+      if (!c) { return; }
+      if (Number(r.leads)) { add(c.id, ym(r.day), "leads", Number(r.leads)); }
+      if (weFront(c) && (!cutoff[r.ad_account_id] || r.day > cutoff[r.ad_account_id]) && Number(r.spend)) {
+        add(c.id, ym(r.day), "synced_spend", Number(r.spend));
+      }
+    });
+    d.cell = cell; d.cutoff = cutoff; d.acctClient = acctClient;
+  }
+  function val(cid, key, cat) { return ((d.cell[cid] || {})[key] || {})[cat] || 0; }
+  function spent(cid, key) { return val(cid, key, "ad_spend") + val(cid, key, "synced_spend"); }
+  function hasAny(cid, cats, year) {
+    var months = d.cell[cid] || {};
+    return Object.keys(months).some(function (k) {
+      return k.slice(0, 4) === String(year) && cats.some(function (cat) { return months[k][cat]; });
+    });
+  }
+  function perLeadServices(cid) { return d.cs.filter(function (x) { return x.client_id === cid && x.billing_type === "per_lead" && x.status !== "ended"; }); }
+  function monthlyServices(cid) { return d.cs.filter(function (x) { return x.client_id === cid && x.billing_type === "monthly" && x.status === "active"; }); }
+  // Running ad balance (reimbursed minus spent) through the end of a month. Negative = they owe us.
+  function adBalance(cid, throughKey) {
+    var months = d.cell[cid] || {}, b = 0;
+    Object.keys(months).forEach(function (k) {
+      if (k <= throughKey) { b += (months[k].ad_reimbursement || 0) - (months[k].ad_spend || 0) - (months[k].synced_spend || 0); }
+    });
+    return b;
+  }
+  function monthTotals(key) {
+    var t = { revenue: 0, per_lead: 0, spend: 0, reimb: 0, payout: 0 };
+    Object.keys(d.cell).forEach(function (cid) {
+      var m = d.cell[cid][key]; if (!m) { return; }
+      t.revenue += m.revenue || 0; t.per_lead += m.per_lead || 0;
+      t.spend += (m.ad_spend || 0) + (m.synced_spend || 0);
+      t.reimb += m.ad_reimbursement || 0; t.payout += m.partner_payout || 0;
+    });
+    t.income = t.revenue + t.per_lead;
+    t.net = t.income + t.reimb - t.spend - t.payout;
+    return t;
+  }
+  function clientName(cid) { var c = byId(d.clients, cid); return c ? c.business_name : "No client"; }
+
+  /* ======================================================================
+     OVERVIEW
+     ====================================================================== */
+  async function overview(el) {
+    el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
+    var leadsNew = 0;
+    try {
+      await load();
+      var lr = await T.sb.from("leads").select("id", { count: "exact", head: true }).eq("stage", "new");
+      leadsNew = lr.count || 0;
+    } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+
+    var now = new Date(), y = now.getFullYear(), key = monthKey(y, now.getMonth());
+    var prevKey = monthKey(now.getMonth() ? y : y - 1, now.getMonth() ? now.getMonth() - 1 : 11);
+    var t = monthTotals(key), tp = monthTotals(prevKey);
+    var ytd = 0, bars = [];
+    for (var m = 0; m <= now.getMonth(); m++) { var mt = monthTotals(monthKey(y, m)); ytd += mt.income; bars.push({ m: M3[m], v: mt.income, net: mt.net }); }
+    var max = Math.max.apply(null, bars.map(function (b) { return b.v; }).concat([1]));
+    var current = d.clients.filter(function (c) { return statusOf(c) !== "churned"; });
+    var mrr = current.filter(function (c) { return statusOf(c) !== "paused"; }).reduce(function (s, c) {
+      return s + monthlyServices(c.id).reduce(function (a, x) { return a + Number(x.price || 0); }, 0);
+    }, 0);
+
+    el.innerHTML = '<div class="cl-wrap ov">' +
+      '<div class="cl-head"><div><h1>Overview</h1><p class="muted">' + esc(monthLong(key)) + " so far</p></div>" +
+      '<div class="cl-actions"><a class="btn" href="#reports">Open reports</a></div></div>' +
+      '<div class="stats">' +
+        kpi("Revenue this month", money(t.income), compare(t.income, tp.income)) +
+        kpi("Ad spend on our cards", money(t.spend), "Reimbursed " + money(t.reimb)) +
+        kpi("Partner payouts", money(t.payout), "") +
+        kpi("Net this month", money(t.net), "Revenue + reimbursed − spend − payouts", t.net < 0 ? "bad" : "") +
+        kpi("Revenue " + y + " to date", money(ytd), "") +
+        kpi("Monthly recurring", money(mrr), current.length + " current clients") +
+      "</div>" +
+      '<div class="ov-grid"><div>' +
+        '<div class="panel"><h2>Needs attention</h2><ul class="todo" id="ovTodo">' + attention(key, leadsNew) + "</ul></div>" +
+      "</div><aside>" +
+        '<div class="panel"><h2>Revenue by month</h2><div class="bars">' + bars.map(function (b) {
+          return '<div class="bar" title="' + esc(b.m + ": " + money(b.v) + " revenue, " + money(b.net) + " net") + '"><small>' + esc(b.v ? "$" + (b.v >= 1000 ? (b.v / 1000).toFixed(1) + "k" : Math.round(b.v)) : "") + '</small><i style="height:' + Math.max(2, Math.round(b.v / max * 82)) + '%"></i><span>' + esc(b.m) + "</span></div>";
+        }).join("") + "</div></div>" +
+        metaStatusPanel() +
+      "</aside></div></div>";
+  }
+  function kpi(label, value, sub, cls) {
+    return '<div class="stat' + (cls ? " " + cls : "") + '"><span>' + esc(label) + "</span><b>" + esc(value) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + "</div>";
+  }
+  function compare(a, b) {
+    if (!b) { return "Last month " + money(b); }
+    var pct = Math.round((a - b) / b * 100);
+    return "Last month " + money(b) + " (" + (pct >= 0 ? "+" : "") + pct + "%)";
+  }
+  function attention(key, leadsNew) {
+    var items = [];
+    var dayOfMonth = new Date().getDate();
+    // Ad spend we fronted that hasn't been reimbursed.
+    d.clients.forEach(function (c) {
+      if (!weFront(c) && !hasAny(c.id, ["ad_spend", "synced_spend"], key.slice(0, 4))) { return; }
+      var b = adBalance(c.id, key);
+      if (b < -25) {
+        items.push({ pri: 1, html: '<b>' + esc(c.business_name) + "</b> owes " + money(-b, { cents: true }) + " in ad spend we fronted" +
+          (c.ad_spend_mode === "sgs_included" ? " (built into their price)" : "") + ' <a href="#reports">Reports</a>' });
+      }
+    });
+    // Active monthly clients with nothing recorded this month (after the 5th).
+    if (dayOfMonth > 5) {
+      d.clients.forEach(function (c) {
+        if (statusOf(c) !== "active" || !monthlyServices(c.id).length) { return; }
+        if (!val(c.id, key, "revenue")) {
+          items.push({ pri: 2, html: "No payment recorded for <b>" + esc(c.business_name) + "</b> in " + esc(monthLong(key)) + ' <a href="#reports">Add it</a>' });
+        }
+      });
+    }
+    // Pay-per-lead: leads from Meta this month, and missing lead prices.
+    d.clients.forEach(function (c) {
+      if (statusOf(c) === "churned") { return; }
+      var pl = perLeadServices(c.id);
+      if (!pl.length) { return; }
+      var leads = val(c.id, key, "leads");
+      if (leads) {
+        var price = Number(pl[0].price || 0);
+        items.push({ pri: 2, html: "<b>" + esc(c.business_name) + "</b>: " + leads + " lead" + (leads === 1 ? "" : "s") + " this month" +
+          (price ? " (" + money(leads * price) + " at " + money(price) + "/lead, " + money(val(c.id, key, "per_lead")) + " billed)" : "") });
+      }
+      if (!Number(pl[0].price)) {
+        items.push({ pri: 3, html: "Set a lead price for <a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a>" });
+      }
+    });
+    var onb = d.clients.filter(function (c) { return statusOf(c) === "onboarding"; });
+    if (onb.length) {
+      items.push({ pri: 3, html: onb.length + " client" + (onb.length === 1 ? "" : "s") + " onboarding: " + onb.map(function (c) { return '<a href="#client/' + c.id + '">' + esc(c.business_name) + "</a>"; }).join(", ") });
+    }
+    if (leadsNew) { items.push({ pri: 2, html: leadsNew + " new website lead" + (leadsNew === 1 ? "" : "s") + ' waiting <a href="#leads">Open</a>' }); }
+    var run = d.runs[0];
+    if (!run) { items.push({ pri: 3, html: 'Meta isn\'t connected yet. Ad spend and leads will update daily once it is. <a href="#settings">Settings</a>' }); }
+    else if (run.ok === false) { items.push({ pri: 1, html: "Last Meta sync had a problem: " + esc(run.message || "unknown error") + ' <a href="#settings">Settings</a>' }); }
+    if (!items.length) { return '<li class="ok">All caught up.</li>'; }
+    return items.sort(function (a, b) { return a.pri - b.pri; }).map(function (i) { return '<li class="p' + i.pri + '">' + i.html + "</li>"; }).join("");
+  }
+  function metaStatusPanel() {
+    var run = d.runs[0];
+    var linked = Object.keys(d.acctClient).length;
+    return '<div class="panel"><h2>Meta</h2><p class="muted" style="font-size:14px">' +
+      (run ? (run.ok ? "Last synced " : "Last sync failed ") + esc(new Date(run.finished_at || run.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) + "." : "Not connected yet.") +
+      " " + linked + " ad account" + (linked === 1 ? "" : "s") + ' linked to clients. <a href="#settings">Manage</a></p></div>';
+  }
+
+  /* ======================================================================
+     REPORTS (the bookkeeping sheet)
+     ====================================================================== */
+  var view = { year: new Date().getFullYear() };
+  async function reports(el, hash) {
+    var m = String(hash || "").match(/^#reports\/(\d{4})/);
+    if (m) { view.year = +m[1]; }
+    el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
+    try { await load(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+    drawReports(el);
+  }
+  function drawReports(el) {
+    var y = view.year, keys = M3.map(function (_, i) { return monthKey(y, i); });
+    var curKey = monthKey(new Date().getFullYear(), new Date().getMonth());
+    var future = function (k) { return k > curKey; };
+    var clients = d.clients.slice();
+
+    // Which clients appear in each section.
+    var revRows = clients.filter(function (c) {
+      return hasAny(c.id, ["revenue"], y) || (statusOf(c) !== "churned" && !perLeadServices(c.id).length && (monthlyServices(c.id).length || statusOf(c) === "onboarding"));
+    });
+    var pplRows = clients.filter(function (c) { return hasAny(c.id, ["per_lead"], y) || (statusOf(c) !== "churned" && perLeadServices(c.id).length); });
+    var adRows = clients.filter(function (c) { return hasAny(c.id, ["ad_spend", "synced_spend", "ad_reimbursement"], y) || (weFront(c) && statusOf(c) !== "churned"); });
+    var payRows = clients.filter(function (c) { return hasAny(c.id, ["partner_payout"], y); });
+
+    function head(first) {
+      return "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
+        "<thead><tr><th class='sticky'>" + esc(first) + "</th><th class='st'>Status</th>" +
+        keys.map(function (k, i) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + M3[i] + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+    }
+    function row(c, cat, opts) {
+      opts = opts || {};
+      var total = 0;
+      var tds = keys.map(function (k) {
+        var v = cat === "spend" ? spent(c.id, k) : val(c.id, k, cat);
+        total += v;
+        var sub = "";
+        if (cat === "per_lead") {
+          var leads = val(c.id, k, "leads");
+          if (leads) { sub = "<small>" + leads + " lead" + (leads === 1 ? "" : "s") + "</small>"; }
+        }
+        if (cat === "spend" && val(c.id, k, "synced_spend")) { sub = "<small>incl. synced</small>"; }
+        return "<td class='c" + (k === curKey ? " now" : "") + (future(k) ? " fut" : "") + "' data-c='" + c.id + "' data-k='" + k + "' data-cat='" + (cat === "spend" ? "ad_spend" : cat) + "' tabindex='0'>" +
+          (v ? money(v, { cents: cat === "spend" || cat === "ad_reimbursement" }) : "") + sub + "</td>";
+      }).join("");
+      return "<tr><th class='sticky'>" + (opts.label ? "<span class='sub'>" + esc(opts.label) + "</span>" : '<a href="#client/' + c.id + '">' + esc(c.business_name) + "</a>") + "</th>" +
+        "<td class='st'>" + (opts.label ? "" : statusBadge(statusOf(c))) + "</td>" + tds + "<td class='tot'>" + (total ? money(total, { cents: cat === "spend" || cat === "ad_reimbursement" }) : "") + "</td></tr>";
+    }
+    function totalRow(label, fn, cents) {
+      var sum = 0;
+      return "<tfoot><tr><th class='sticky'>" + esc(label) + "</th><td class='st'></td>" + keys.map(function (k) {
+        var v = fn(k); sum += v;
+        return "<td" + (k === curKey ? " class='now'" : "") + ">" + (v ? money(v, { cents: cents }) : "") + "</td>";
+      }).join("") + "<td class='tot'>" + money(sum, { cents: cents }) + "</td></tr></tfoot>";
+    }
+    function sumCat(rows, cat) { return function (k) { return rows.reduce(function (s, c) { return s + (cat === "spend" ? spent(c.id, k) : val(c.id, k, cat)); }, 0); }; }
+    function section(id, title, sub, table, addCat) {
+      return '<section class="rep-sec" id="' + id + '"><div class="rep-h"><h2>' + esc(title) + "</h2>" +
+        (addCat ? '<button class="btn sm" data-add="' + addCat + '">+ Add amount</button>' : "") + "</div>" +
+        (sub ? '<p class="muted rep-sub">' + sub + "</p>" : "") +
+        '<div class="sheet-wrap"><table class="sheet">' + table + "</table></div></section>";
+    }
+
+    // Summary
+    var sumKeys = keys.map(monthTotals);
+    function sumLine(label, f, cls) {
+      var tot = 0;
+      return "<tr class='" + (cls || "") + "'><th class='sticky'>" + esc(label) + "</th><td class='st'></td>" + sumKeys.map(function (t, i) {
+        var v = f(t); tot += v;
+        return "<td" + (keys[i] === curKey ? " class='now'" : "") + ">" + (v ? money(v) : "") + "</td>";
+      }).join("") + "<td class='tot'>" + money(tot) + "</td></tr>";
+    }
+    var summary = head("Month") + "<tbody>" +
+      sumLine("Revenue (retainers + one-time)", function (t) { return t.revenue; }) +
+      sumLine("Pay per lead", function (t) { return t.per_lead; }) +
+      sumLine("Ad spend reimbursed", function (t) { return t.reimb; }) +
+      sumLine("Ad spend on our cards", function (t) { return -t.spend; }, "neg") +
+      sumLine("Partner payouts", function (t) { return -t.payout; }, "neg") +
+      "</tbody><tfoot>" + sumLine("Net", function (t) { return t.net; }) + "</tfoot>";
+
+    // Ad spend: three lines per client.
+    var adBody = adRows.map(function (c) {
+      var bal = "<tr class='bal'><th class='sticky'><span class='sub'>Balance</span></th><td class='st'></td>" + keys.map(function (k) {
+        if (future(k) || !hasThrough(c.id, k)) { return "<td" + (k === curKey ? " class='now'" : "") + "></td>"; }
+        var b = adBalance(c.id, k);
+        return "<td class='" + (b < 0 ? "neg" : "pos") + (k === curKey ? " now" : "") + "'>" + money(b, { cents: true }) + "</td>";
+      }).join("") + "<td class='tot'></td></tr>";
+      return "<tbody class='grp'>" +
+        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + "</td></tr>" +
+        row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Reimbursed" }) + bal + "</tbody>";
+    }).join("");
+
+    var partnerName = (d.partners[0] || {}).name || "partner";
+    el.innerHTML = '<div class="cl-wrap rep">' +
+      '<div class="cl-head"><div><h1>Reports</h1><p class="muted">Click any month to see or add amounts.</p></div>' +
+      '<div class="cl-actions year"><a class="btn sm ghost" href="#reports/' + (y - 1) + '" aria-label="Previous year">←</a><b>' + y + '</b><a class="btn sm ghost" href="#reports/' + (y + 1) + '" aria-label="Next year">→</a></div></div>' +
+      '<nav class="rep-nav"><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
+      section("secSum", "Summary " + y, "", summary) +
+      section("secRev", "Revenue " + y, "Retainers, websites and other one-time work, by the month it was billed.",
+        head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
+      section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
+        head("Client") + "<tbody>" + pplRows.map(function (c) { return row(c, "per_lead"); }).join("") + "</tbody>" + totalRow("Total pay per lead", sumCat(pplRows, "per_lead")), "per_lead") +
+      section("secAds", "Ad spend and reimbursement", "Spent = Meta charges on our cards (5978, 0719), then daily spend from Meta after the last imported charge. Balance below zero means they owe us.",
+        head("Client") + adBody + totalRow("Total spent", sumCat(adRows, "spend"), true).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
+        totalRow("Total reimbursed", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
+      section("secPay", "Pay " + partnerName, "What we paid out, by client.",
+        head("Client") + "<tbody>" + payRows.map(function (c) { return row(c, "partner_payout"); }).join("") + "</tbody>" + totalRow("Total paid out", sumCat(payRows, "partner_payout")), "partner_payout") +
+      "</div>";
+
+    el.querySelectorAll("td.c").forEach(function (td) {
+      td.onclick = function () { editCell(td.dataset.c, td.dataset.k, td.dataset.cat, el); };
+      td.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); td.onclick(); } };
+    });
+    el.querySelectorAll("[data-add]").forEach(function (b) { b.onclick = function () { addAmount(b.dataset.add, el); }; });
+    el.querySelectorAll("[data-jump]").forEach(function (a) {
+      a.onclick = function (e) { e.preventDefault(); var s = $(a.dataset.jump); if (s) { s.scrollIntoView({ behavior: "smooth", block: "start" }); } };
+    });
+    // Start the sheets scrolled so the current month is in view on small screens.
+    el.querySelectorAll(".sheet-wrap").forEach(function (w) {
+      var now = w.querySelector("th.now");
+      if (now && w.scrollWidth > w.clientWidth) { w.scrollLeft = Math.max(0, now.offsetLeft - w.clientWidth / 2); }
+    });
+  }
+  function hasThrough(cid, key) {
+    var months = d.cell[cid] || {};
+    return Object.keys(months).some(function (k) { return k <= key && (months[k].ad_spend || months[k].synced_spend || months[k].ad_reimbursement); });
+  }
+  function modeLabel(c) {
+    return {
+      sgs_prepaid: "We pay Meta, client prepays us", sgs_partner: "We pay Meta, partner reimburses monthly",
+      sgs_included: "We pay Meta, built into their price", client_pays: "Client pays Meta directly", none: "Ad spend setup not set"
+    }[c.ad_spend_mode || "none"] || "";
+  }
+
+  /* ---------- cell detail / add / edit ---------- */
+  function editCell(cid, key, cat, el, editId) {
+    var c = byId(d.clients, cid);
+    var rows = d.entries.filter(function (e) { return e.client_id === cid && ym(e.month) === key && e.category === cat; });
+    var synced = cat === "ad_spend" ? val(cid, key, "synced_spend") : 0;
+    var leads = val(cid, key, "leads");
+    var editing = editId ? byId(d.entries, editId) : null;
+    var total = rows.reduce(function (s, e) { return s + Number(e.amount); }, 0) + synced;
+    var price = cat === "per_lead" ? Number((perLeadServices(cid)[0] || {}).price || 0) : 0;
+
+    T.modal("<h2>" + esc(c ? c.business_name : "No client") + "</h2>" +
+      "<p class='muted' style='margin:-8px 0 14px'>" + esc(CAT[cat] + " · " + monthLong(key)) + " · <b style='color:var(--text)'>" + money(total, { cents: true }) + "</b></p>" +
+      (cat === "per_lead" && leads ? "<p class='hintbox'>Meta reports " + leads + " lead" + (leads === 1 ? "" : "s") + " this month" + (price ? " → " + money(leads * price) + " at " + money(price) + "/lead." : ".") + "</p>" : "") +
+      (rows.length || synced ? "<ul class='entries'>" + rows.map(function (e) {
+        var locked = e.source === "meta_csv" || e.source === "meta_api";
+        return "<li><span class='amt'>" + money(e.amount, { cents: true }) + "</span><span class='what'>" +
+          esc([e.entry_date ? dateShort(e.entry_date) : "", e.payment_method, e.note].filter(Boolean).join(" · ") || "—") +
+          "<small>" + esc(SOURCE[e.source] || e.source) + (e.created_by ? " · " + esc(e.created_by) : "") + "</small></span>" +
+          (locked ? "" : "<span class='act'><button class='btn sm ghost' data-edit='" + e.id + "'>Edit</button><button class='btn sm ghost danger' data-del='" + e.id + "' aria-label='Delete'>×</button></span>") + "</li>";
+      }).join("") + (synced ? "<li><span class='amt'>" + money(synced, { cents: true }) + "</span><span class='what'>Daily spend from Meta<small>Meta (synced)</small></span></li>" : "") + "</ul>"
+        : "<p class='muted' style='font-size:14px'>Nothing recorded yet.</p>") +
+      "<h3>" + (editing ? "Edit amount" : "Add an amount") + "</h3>" +
+      "<div class='g3'><div class='fld'><label for='meAmt'>Amount ($)</label><input class='inp' id='meAmt' type='number' step='0.01' inputmode='decimal' value='" + (editing ? esc(editing.amount) : "") + "'></div>" +
+      "<div class='fld'><label for='meDate'>Date <span class='opt'>optional</span></label><input class='inp' id='meDate' type='date' value='" + esc(editing ? editing.entry_date || "" : (key === ym(todayStr()) ? todayStr() : "")) + "'></div>" +
+      "<div class='fld'><label for='meNote'>Note <span class='opt'>optional</span></label><input class='inp' id='meNote' value='" + esc(editing ? editing.note : "") + "' placeholder='" + (cat === "per_lead" ? "e.g. 4 leads - 10/28/26" : "e.g. Zelle, Stripe invoice") + "'></div></div>" +
+      "<div class='mfoot'><button class='btn' id='mCancel'>Close</button><button class='btn gold' id='mSave'>" + (editing ? "Save changes" : "Add") + "</button></div>");
+    $("mCancel").onclick = T.closeModal;
+    document.querySelectorAll("[data-edit]").forEach(function (b) { b.onclick = function () { editCell(cid, key, cat, el, b.dataset.edit); }; });
+    document.querySelectorAll("[data-del]").forEach(function (b) {
+      b.onclick = async function () {
+        if (!confirm("Delete this amount?")) { return; }
+        try { await q(T.sb.from("money_entries").delete().eq("id", b.dataset.del)); await load(); drawReports(el); editCell(cid, key, cat, el); T.toast("Deleted"); }
+        catch (e) { T.fail(e); }
+      };
+    });
+    $("meAmt").focus();
+    $("mSave").onclick = async function () {
+      var amt = parseFloat($("meAmt").value);
+      if (!isFinite(amt) || !amt) { T.toast("Enter an amount"); return; }
+      var date = $("meDate").value || null;
+      var row = { amount: Math.round(amt * 100) / 100, entry_date: date, note: $("meNote").value.trim() };
+      try {
+        if (editing) {
+          await q(T.sb.from("money_entries").update(row).eq("id", editing.id));
+        } else {
+          var me = await T.sb.auth.getUser();
+          row.client_id = cid; row.category = cat; row.month = key + "-01"; row.source = "manual";
+          row.created_by = (me.data && me.data.user && me.data.user.email) || "";
+          if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
+          await q(T.sb.from("money_entries").insert(row));
+        }
+        await load(); drawReports(el); editCell(cid, key, cat, el); T.toast(editing ? "Saved" : "Added");
+      } catch (e) { T.fail(e); }
+    };
+  }
+  function addAmount(cat, el) {
+    var now = new Date();
+    var opts = d.clients.slice().sort(function (a, b) {
+      var ca = statusOf(a) === "churned" ? 1 : 0, cb = statusOf(b) === "churned" ? 1 : 0;
+      return ca - cb || a.business_name.localeCompare(b.business_name);
+    });
+    T.modal("<h2>Add " + esc(CAT[cat].toLowerCase()) + "</h2>" +
+      "<div class='g3'><div class='fld'><label for='aaClient'>Client</label><select class='inp' id='aaClient'>" +
+      opts.map(function (c) { return "<option value='" + c.id + "'>" + esc(c.business_name) + (statusOf(c) === "churned" ? " (churned)" : "") + "</option>"; }).join("") + "</select></div>" +
+      "<div class='fld'><label for='aaMonth'>Month</label><select class='inp' id='aaMonth'>" + M3.map(function (m, i) {
+        var k = monthKey(view.year, i);
+        return "<option value='" + k + "'" + (view.year === now.getFullYear() && i === now.getMonth() ? " selected" : "") + ">" + m + " " + view.year + "</option>";
+      }).join("") + "</select></div>" +
+      "<div class='fld'><label for='aaAmt'>Amount ($)</label><input class='inp' id='aaAmt' type='number' step='0.01' inputmode='decimal'></div></div>" +
+      "<div class='fld' style='margin-top:12px'><label for='aaNote'>Note <span class='opt'>optional</span></label><input class='inp' id='aaNote'></div>" +
+      "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Add</button></div>");
+    $("mCancel").onclick = T.closeModal;
+    $("mSave").onclick = async function () {
+      var amt = parseFloat($("aaAmt").value);
+      if (!isFinite(amt) || !amt) { T.toast("Enter an amount"); return; }
+      var cid = $("aaClient").value, c = byId(d.clients, cid);
+      var me = await T.sb.auth.getUser();
+      var row = { client_id: cid, category: cat, month: $("aaMonth").value + "-01", amount: Math.round(amt * 100) / 100, note: $("aaNote").value.trim(), source: "manual",
+        created_by: (me.data && me.data.user && me.data.user.email) || "" };
+      if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
+      try { await q(T.sb.from("money_entries").insert(row)); T.closeModal(); await load(); drawReports(el); T.toast("Added"); }
+      catch (e) { T.fail(e); }
+    };
+  }
+
+  /* ======================================================================
+     CLIENT PAGE PANEL
+     ====================================================================== */
+  async function clientPanel(el, c) {
+    try { await load(); } catch (e) { el.innerHTML = ""; return; }
+    var y = new Date().getFullYear(), curKey = monthKey(y, new Date().getMonth());
+    var tot = { revenue: 0, per_lead: 0, spend: 0, reimb: 0, payout: 0, leads: 0 };
+    M3.forEach(function (_, i) {
+      var k = monthKey(y, i);
+      tot.revenue += val(c.id, k, "revenue"); tot.per_lead += val(c.id, k, "per_lead");
+      tot.spend += spent(c.id, k); tot.reimb += val(c.id, k, "ad_reimbursement");
+      tot.payout += val(c.id, k, "partner_payout"); tot.leads += val(c.id, k, "leads");
+    });
+    var bal = adBalance(c.id, curKey);
+    var lines = [
+      ["Revenue " + y, money(tot.revenue + tot.per_lead)],
+      tot.leads ? ["Leads from Meta " + y, String(tot.leads)] : null,
+      tot.spend || weFront(c) ? ["Ad spend on our cards", money(tot.spend, { cents: true })] : null,
+      tot.reimb || weFront(c) ? ["Ad spend reimbursed", money(tot.reimb, { cents: true })] : null,
+      tot.spend || tot.reimb ? ["Ad balance", '<b class="' + (bal < 0 ? "neg" : "pos") + '">' + money(bal, { cents: true }) + "</b>" + (bal < 0 ? " owed to us" : "")] : null,
+      tot.payout ? ["Paid to partner", money(tot.payout)] : null
+    ].filter(Boolean);
+    el.innerHTML = '<div class="panel"><h2>Money <a class="btn sm" href="#reports">Reports</a></h2><dl class="kv">' +
+      lines.map(function (l) { return "<dt>" + esc(l[0]) + "</dt><dd>" + (String(l[1]).indexOf("<") === 0 ? l[1] : esc(l[1])) + "</dd>"; }).join("") + "</dl></div>";
+  }
+
+  /* ======================================================================
+     SETTINGS: META CONNECTION
+     ====================================================================== */
+  async function metaSettings(el) {
+    el.innerHTML = '<div class="panel"><h2>Meta ads</h2><p class="muted">Loading...</p></div>';
+    var configured = false;
+    try {
+      await load();
+      var st = await T.fn("meta-sync", { action: "status" });
+      configured = !!(st && st.configured);
+    } catch (e) { /* show as not connected */ }
+    var run = d.runs[0];
+    var known = {};
+    d.accounts.forEach(function (a) { known[a.ad_account_id] = a; });
+    Object.keys(d.acctClient).forEach(function (id) { if (!known[id]) { known[id] = { ad_account_id: id, name: "", last_error: "" }; } });
+    var list = Object.keys(known).map(function (k) { return known[k]; }).sort(function (a, b) {
+      var ca = d.acctClient[a.ad_account_id] ? 0 : 1, cb = d.acctClient[b.ad_account_id] ? 0 : 1;
+      return ca - cb || String(a.name || "").localeCompare(String(b.name || ""));
+    });
+    el.innerHTML = '<div class="panel"><h2>Meta ads <span class="badge ' + (configured ? "ok" : "warn") + '">' + (configured ? "Connected" : "Not connected") + "</span></h2>" +
+      "<p class='muted' style='font-size:14px;margin-bottom:12px'>" +
+      (configured ? "Daily spend and leads sync every morning for every ad account our Meta system user can see." :
+        "Once the Meta access token is added in Supabase, daily spend and leads sync every morning. Until then, ad spend comes from the billing reports already imported.") + "</p>" +
+      (run ? "<p style='font-size:14px;margin-bottom:12px'>Last sync: " + esc(new Date(run.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) + " · " +
+        (run.ok ? "<span style='color:var(--ok)'>OK</span>, " + run.accounts + " accounts, " + run.rows + " days updated" : "<span style='color:var(--bad)'>" + esc(run.message || "failed") + "</span>") + "</p>" : "") +
+      "<div class='addfiles' style='margin-bottom:14px'><button class='btn gold' id='metaSync'" + (configured ? "" : " disabled") + ">Sync now</button></div>" +
+      "<h3 class='h3'>Ad accounts</h3><div class='acct-list'>" + (list.length ? list.map(function (a) {
+        var c = d.acctClient[a.ad_account_id];
+        return "<div class='acct'><div><b>" + esc(a.name || "Ad account") + "</b><small>" + esc(a.ad_account_id) + (a.last_synced_at ? " · synced " + esc(dateShort(a.last_synced_at.slice(0, 10))) : "") +
+          (a.last_error ? " · <span style='color:var(--bad)'>" + esc(a.last_error) + "</span>" : "") + "</small></div>" +
+          "<select class='inp' data-acct='" + esc(a.ad_account_id) + "' aria-label='Client for ad account " + esc(a.ad_account_id) + "'><option value=''>Not a client</option>" +
+          d.clients.map(function (x) { return "<option value='" + x.id + "'" + (c && c.id === x.id ? " selected" : "") + ">" + esc(x.business_name) + "</option>"; }).join("") + "</select></div>";
+      }).join("") : "<p class='muted'>No ad accounts yet.</p>") + "</div></div>";
+
+    var btn = $("metaSync");
+    if (btn) {
+      btn.onclick = async function () {
+        btn.disabled = true; btn.textContent = "Syncing...";
+        try {
+          var r = await T.fn("meta-sync", {});
+          T.toast(r.ok ? "Synced " + r.accounts + " accounts" : (r.message || "Sync had a problem"), 6000);
+        } catch (e) { T.fail(e); }
+        metaSettings(el);
+      };
+    }
+    el.querySelectorAll("[data-acct]").forEach(function (s) {
+      s.onchange = async function () {
+        var acct = s.dataset.acct, to = s.value;
+        try {
+          // Remove from whichever client has it, then add to the chosen one.
+          var owners = d.clients.filter(function (x) { return (x.meta_ad_account_ids || []).indexOf(acct) !== -1; });
+          for (var i = 0; i < owners.length; i++) {
+            await q(T.sb.from("clients").update({ meta_ad_account_ids: owners[i].meta_ad_account_ids.filter(function (z) { return z !== acct; }) }).eq("id", owners[i].id));
+          }
+          if (to) {
+            var target = byId(d.clients, to);
+            await q(T.sb.from("clients").update({ meta_ad_account_ids: (target.meta_ad_account_ids || []).filter(function (z) { return z !== acct; }).concat([acct]) }).eq("id", to));
+          }
+          T.toast("Saved");
+          metaSettings(el);
+        } catch (e) { T.fail(e); }
+      };
+    });
+  }
+
+  window.SGSReports = {
+    init: function (helpers) { T = helpers; },
+    overview: overview, reports: reports, metaSettings: metaSettings, clientPanel: clientPanel
+  };
+})();

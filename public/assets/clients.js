@@ -20,7 +20,8 @@
     none: "No ads / not tracked",
     client_pays: "Client pays Meta directly",
     sgs_prepaid: "SGS pays Meta, client prepays SGS",
-    sgs_partner: "SGS pays Meta, partner reimburses monthly"
+    sgs_partner: "SGS pays Meta, partner reimburses monthly",
+    sgs_included: "SGS pays Meta, built into their price"
   };
   var CADENCE = { "": "—", weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
   var PAY = { stripe: "Stripe", zelle: "Zelle", check: "Check", ach: "ACH", other: "Other" };
@@ -280,11 +281,13 @@
         servicesPanel(c, list) +
         adsPanel(c) +
       "</div><aside>" +
+        '<div id="clMoney"></div>' +
         detailsPanel(c, p) +
         contactsPanel(c) +
       "</aside></div></div>";
     wireClient(c);
     loadContacts(c);
+    if (window.SGSReports) { window.SGSReports.clientPanel($("clMoney"), c); }
   }
 
   function servicesPanel(c, list) {

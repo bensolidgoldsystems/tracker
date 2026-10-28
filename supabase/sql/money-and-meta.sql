@@ -1,0 +1,8 @@
+-- Money + Meta tables (already applied as migration "money_and_meta").
+-- money_entries: one row per amount in a month (Reports page adds these up).
+--   category: revenue | per_lead | ad_spend | ad_reimbursement | partner_payout
+--   source:   manual | sheet | meta_csv | meta_api | stripe
+--   external_ref is unique, so re-importing the same Meta charge or sheet cell is skipped.
+-- meta_ad_accounts / meta_daily / meta_sync_runs: filled by the meta-sync Edge Function.
+-- clients.ad_spend_mode gained 'sgs_included' (we pay Meta; built into their price).
+-- RLS: team (is_team()) manages money_entries; reads the meta tables. Only the service key writes meta tables.

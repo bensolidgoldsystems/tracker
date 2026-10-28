@@ -280,16 +280,17 @@
   });
 
   /* ---------- routing ----------
-     #  or #clients ... Clients (clients.js)   #client/<id>  #partner/<id>
+     #  or #overview ... Overview (reports.js)   #reports[/<year>] ... Reports (reports.js)
+     #clients ... Clients (clients.js)   #client/<id>  #partner/<id>
      #leads ... Website Leads board            #lead/<id>
      #admin  #settings */
-  var VIEWS = ["clientsView", "boardView", "leadView", "adminView", "settingsView"];
+  var VIEWS = ["overviewView", "clientsView", "reportsView", "boardView", "leadView", "adminView", "settingsView"];
   function show(id) {
     VIEWS.forEach(function (v) { $(v).classList.toggle("hidden", v !== id); });
-    var h = location.hash;
-    var onLeads = /^#(leads|lead\/)/.test(h), onClients = !onLeads && !/^#(admin|settings)/.test(h);
-    $("tabLeads").classList.toggle("on", onLeads);
-    $("tabClients").classList.toggle("on", onClients);
+    $("tabOverview").classList.toggle("on", id === "overviewView");
+    $("tabClients").classList.toggle("on", id === "clientsView");
+    $("tabReports").classList.toggle("on", id === "reportsView");
+    $("tabLeads").classList.toggle("on", id === "boardView" || id === "leadView");
   }
   function route() {
     var h = location.hash;
@@ -299,7 +300,9 @@
     else if (h === "#admin" && myRole === "admin") { show("adminView"); openAdmin(); }
     else if (m) { show("leadView"); openLead(m[1]); }
     else if (h === "#leads") { show("boardView"); renderBoard(); }
-    else { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
+    else if (/^#reports/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
+    else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
+    else { show("overviewView"); window.SGSReports.overview($("overviewView")); }
     window.scrollTo(0, 0);
   }
   window.addEventListener("hashchange", function () { if (!$("appView").classList.contains("hidden")) { route(); } });
@@ -324,6 +327,7 @@
       '<div><button class="btn gold" type="submit" id="pwBtn">Update password</button></div>' +
       '</form><p class="muted" id="pwMsg" style="font-size:13px;margin-top:10px">At least 8 characters.</p></div>' +
       '<div id="settingsExtra"></div>' +
+      '<div id="metaSettings"></div>' +
       '<div class="panel"><h2>Sign out</h2>' +
       '<p class="muted" style="font-size:14px;margin-bottom:12px">Signing out everywhere ends your Tracker sessions on every computer and phone. You\'ll need your password and a new code to get back in.</p>' +
       '<div class="addfiles"><button class="btn" id="soHere">Sign out of this device</button><button class="btn danger" id="soAll">Sign out everywhere</button></div></div>';
@@ -356,6 +360,7 @@
     });
     $("soHere").addEventListener("click", function () { signOut(); });   // this device only
     window.SGSClients.renderSettings($("settingsExtra"));
+    window.SGSReports.metaSettings($("metaSettings"));
     $("soAll").addEventListener("click", async function () {
       if (!confirm("Sign out of the Tracker on every device?")) { return; }
       try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
@@ -910,10 +915,12 @@
   }
 
   /* ---------- clients module (clients.js) ---------- */
-  window.SGSClients.init({
+  var shared = {
     sb: sb, $: $, esc: esc, toast: toast, fail: fail, copyText: copyText, fmtDate: fmtDate,
-    linkify: linkify, modal: modal, closeModal: closeModal
-  });
+    linkify: linkify, modal: modal, closeModal: closeModal, fn: fn
+  };
+  window.SGSClients.init(shared);
+  window.SGSReports.init(shared);
 
   /* ---------- start ---------- */
   sb.auth.onAuthStateChange(function (event) {

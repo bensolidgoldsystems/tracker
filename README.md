@@ -2,13 +2,23 @@
 
 Internal tool for Solid Gold Systems website leads: **tracker.solidgoldsystems.com**
 
-Internal only (login required). Two modules:
+Internal only (login required). Modules:
+
+- **Overview** (home): this month's revenue, ad spend on our cards, payouts and net; what needs attention (ad spend we fronted that hasn't been reimbursed, missing payments, lead counts, lead prices to set, onboarding clients).
+- **Reports**: the bookkeeping sheet, month by month. Summary, Revenue, Pay per lead, Ad spend and reimbursement (with each client's running balance), and Pay 633 Studios. Click any month to see, add, edit or delete amounts (`money_entries`).
 
 - **Clients**: every client's profile, contacts, partner (e.g. 633 Studios), services with their own prices (price history kept), ad accounts, who pays Meta, and an ad launch/pause timeline. Monthly recurring totals per client, per partner and overall. Services catalog and partners are edited in Settings.
 - **Website Leads**: 4-stage board, lead details, files, build checklist, notes, **Export build kit (.zip)**, and **Convert to client**.
 - **Website form link** (on a client): a private link to the detailed form that skips the short form and booking. One use, expires in 14 days, stored in `intake_invites`; the lead it creates is linked to the client.
 
-Full roadmap: Meta billing imports, month-end documents, Stripe sync, pay-per-lead charging (see the project plan).
+Full roadmap: month-end documents, Stripe sync, pay-per-lead charging (see the project plan).
+
+## Meta ads (automatic)
+
+Supabase Edge Function `meta-sync` pulls daily spend and leads for every ad account the SGS Meta system user can see into `meta_daily`. It runs every morning (pg_cron job `meta-sync-daily`, 10:20 UTC) and from **Settings → Meta ads → Sync now**.
+- Needs the Supabase Edge Function secret `META_ACCESS_TOKEN` (system user token with `ads_read`). Optional `META_API_VERSION` (default v23.0).
+- Ad spend on Reports = Meta charges on our cards (imported billing reports, `source = meta_csv`) plus synced daily spend after the last imported charge for that account, for clients whose ad spend setup says we pay Meta.
+- Link ad accounts to clients in Settings → Meta ads.
 
 Leads come from the detailed intake form on **websites.solidgoldsystems.com** (shown after someone books a call, plus a standalone copy at `/intake/`). The form only opens with proof checked on the server: a pass signed right after the short form, a client invite link, or a `cid` of a GHL contact tagged `lp-website-500`. That site's Netlify functions write the lead and files into Supabase; this app only reads and manages them.
 
@@ -18,7 +28,7 @@ Leads come from the detailed intake form on **websites.solidgoldsystems.com** (s
 |---|---|
 | Code | This repo; every push to `main` auto-deploys on Netlify (`solidgoldtracker`) — push only when a change is ready, each deploy uses Netlify credits |
 | Intake form + functions | websites.solidgoldsystems.com (separate Netlify site, drag-and-drop zip) |
-| Data + files | Supabase project `sgs-tracker`: `leads`, `lead_files`, `team_members`, `clients`, `client_contacts`, `partners`, `services`, `client_services` (+ price history), `ad_events`, `intake_invites`; private bucket `intake` |
+| Data + files | Supabase project `sgs-tracker`: `leads`, `lead_files`, `team_members`, `clients`, `client_contacts`, `partners`, `services`, `client_services` (+ price history), `ad_events`, `intake_invites`, `money_entries`, `meta_ad_accounts`, `meta_daily`, `meta_sync_runs`; private bucket `intake` |
 | CRM | Intake submissions (from the websites site) update the GHL contact and add the tag `website-intake-complete` |
 
 ## Files
@@ -28,6 +38,7 @@ public/index.html            Tracker app
 public/assets/schema.js      THE list of questions, file types, checklist and stages
 public/assets/tracker.js     Tracker shell: sign-in, 2FA, routing, Website Leads, Admin, Settings
 public/assets/clients.js     Clients module: clients, contacts, partners, services and prices, ad timeline
+public/assets/reports.js     Overview, Reports (bookkeeping sheet), client money panel, Meta settings
 public/assets/config.js      Public Supabase URL + anon key
 ```
 
@@ -46,6 +57,7 @@ The database only returns Tracker data to sessions that passed the code (`public
 Supabase Edge Functions (no Netlify credits; source in `supabase/functions/`):
 - `email-2fa`: sends and checks the codes. Needs the Supabase secret `RESEND_API_KEY`.
 - `admin-users`: Admin page actions (list, invite, copy invite link, change role, sign out, remove). Admins only.
+- `meta-sync`: daily Meta spend + leads (see Meta ads above).
 
 ## Giving someone access
 
