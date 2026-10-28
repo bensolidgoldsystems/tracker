@@ -1,6 +1,11 @@
 // Solid Gold Systems Tracker - Meta Marketing API sync.
-// Pulls daily spend and leads for every ad account the SGS system user can see,
-// into public.meta_ad_accounts and public.meta_daily.
+// For every ad account the SGS system user can see:
+//   - daily spend and leads -> public.meta_daily (leads drive pay-per-lead; spend is for reference)
+//   - for clients whose ad spend SGS pays: the actual card charges ("billing charge" events in the
+//     account's activity log) -> public.money_entries (category ad_spend, source meta_api).
+//     Charges carry Meta's transaction ID, the same one the billing report CSV shows, so nothing is
+//     counted twice; only charges after the last imported CSV charge for that account are added.
+//   - the account's current balance (spend not yet charged to the card) and which card it bills.
 // Called daily by pg_cron (x-cron-secret header) and by "Sync now" in Tracker Settings
 // (signed-in team member whose sign-in passed email 2FA).
 // Secrets: META_ACCESS_TOKEN (system user token, ads_read), optional META_API_VERSION.
@@ -76,6 +81,57 @@ function leadCount(actions: any[] | undefined): number {
   return pick("lead") ?? pick("onsite_conversion.lead_grouped") ?? pick("offsite_conversion.fb_pixel_lead") ?? 0;
 }
 
+// Calendar date in New York for a Meta timestamp.
+function nyDate(iso: string): string {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+function parseExtra(x: unknown): Record<string, any> {
+  if (!x) return {};
+  if (typeof x === "object") return x as Record<string, any>;
+  try { return JSON.parse(String(x)); } catch (_) { return {}; }
+}
+// Card charges from the account's activity log -> money_entries (ad_spend, meta_api).
+async function syncCharges(acct: string, clientId: string, token: string, card0: string): Promise<number> {
+  // Start after the last imported billing-report charge, or a week before the last synced one.
+  const { data: lastCsv } = await db.from("money_entries").select("entry_date").eq("ad_account_id", acct).eq("source", "meta_csv")
+    .order("entry_date", { ascending: false }).limit(1);
+  const { data: lastApi } = await db.from("money_entries").select("entry_date").eq("ad_account_id", acct).eq("source", "meta_api")
+    .order("entry_date", { ascending: false }).limit(1);
+  const csvCut = lastCsv && lastCsv.length ? lastCsv[0].entry_date : null;
+  let since = csvCut ? addDays(csvCut, 1) : FIRST_DAY;
+  if (lastApi && lastApi.length) { const s2 = addDays(lastApi[0].entry_date, -7); if (s2 > since) since = s2; }
+  const events = await graphAll("/act_" + acct + "/activities", {
+    fields: "event_time,event_type,extra_data", since: since, until: ymd(new Date()), limit: "500",
+  }, token);
+  const rows: any[] = [];
+  for (const ev of events) {
+    if (ev.event_type !== "ad_account_billing_charge") continue;
+    const x = parseExtra(ev.extra_data);
+    const cents = Number(x.new_value ?? x.amount ?? x.charge_amount);
+    if (!isFinite(cents) || !cents) continue;
+    const date = nyDate(ev.event_time);
+    if (csvCut && date <= csvCut) continue;            // already covered by the billing report
+    const txn = String(x.transaction_id || x.txn_id || "");
+    const card = String(x.payment_method || x.funding_source || x.card || card0 || "");
+    rows.push({
+      client_id: clientId, category: "ad_spend", month: date.slice(0, 7) + "-01", entry_date: date,
+      amount: Math.round(cents) / 100, source: "meta_api", ad_account_id: acct,
+      external_ref: "meta:" + (txn || ev.event_time + ":" + cents),
+      payment_method: card.slice(0, 60), note: txn ? "" : "Meta charge (no transaction ID)",
+    });
+  }
+  // Billing events we couldn't read: surface one so the format can be fixed (shows in Settings).
+  const billing = events.filter((e) => e.event_type === "ad_account_billing_charge");
+  if (billing.length && !rows.length && !csvCut) {
+    throw new Error("Couldn't read billing charges; sample: " + JSON.stringify(billing[0].extra_data).slice(0, 300));
+  }
+  if (!rows.length) return 0;
+  const { data, error } = await db.from("money_entries").upsert(rows, { onConflict: "external_ref", ignoreDuplicates: true }).select("id");
+  if (error) throw error;
+  return (data || []).length;
+}
+
 async function runSync(trigger: string, sinceOverride?: string) {
   const token = Deno.env.get("META_ACCESS_TOKEN") || "";
   if (!token) return { ok: false, configured: false, message: "Meta isn't connected yet (META_ACCESS_TOKEN not set)." };
@@ -92,8 +148,14 @@ async function runSync(trigger: string, sinceOverride?: string) {
         account_status: a.account_status ?? null, owner_name: a.business_name || "",
       })), { onConflict: "ad_account_id" });
     }
-    const { data: linked } = await db.from("clients").select("meta_ad_account_ids");
-    for (const c of linked || []) for (const id of c.meta_ad_account_ids || []) if (/^\d+$/.test(id)) ids.add(id);
+    const { data: linked } = await db.from("clients").select("id,ad_spend_mode,meta_ad_account_ids");
+    const payer: Record<string, string> = {};   // ad account -> client id, when SGS pays Meta
+    for (const c of linked || []) for (const id of c.meta_ad_account_ids || []) {
+      if (!/^\d+$/.test(id)) continue;
+      ids.add(id);
+      if (/^sgs_/.test(c.ad_spend_mode || "")) payer[id] = c.id;
+    }
+    let charges = 0;
 
     // 2. Daily spend + leads per account.
     const until = ymd(new Date());
@@ -122,6 +184,18 @@ async function runSync(trigger: string, sinceOverride?: string) {
             rows += up.length;
           }
         }
+        // Balance waiting to be charged, and the card on file.
+        let card = "";
+        try {
+          const a = await graph("/act_" + id, { fields: "balance,amount_spent,funding_source_details" }, token);
+          card = String((a.funding_source_details && a.funding_source_details.display_string) || "");
+          await db.from("meta_ad_accounts").upsert({
+            ad_account_id: id, balance: a.balance != null ? Number(a.balance) / 100 : null,
+            amount_spent: a.amount_spent != null ? Number(a.amount_spent) / 100 : null,
+            funding_source: card, balance_at: new Date().toISOString(),
+          }, { onConflict: "ad_account_id" });
+        } catch (e) { problems.push(id + " (balance): " + String((e as Error).message || e)); }
+        if (payer[id]) charges += await syncCharges(id, payer[id], token, card);
         await db.from("meta_ad_accounts").upsert({ ad_account_id: id, last_synced_at: new Date().toISOString(), last_error: "" }, { onConflict: "ad_account_id" });
       } catch (e) {
         const msg = String((e as Error).message || e);
@@ -129,7 +203,7 @@ async function runSync(trigger: string, sinceOverride?: string) {
         await db.from("meta_ad_accounts").upsert({ ad_account_id: id, last_error: msg.slice(0, 500) }, { onConflict: "ad_account_id" });
       }
     }
-    const message = problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 900) : "";
+    const message = (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
     await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok: !problems.length, accounts, rows, message }).eq("id", run?.id);
     return { ok: !problems.length, configured: true, accounts, rows, message };
   } catch (e) {

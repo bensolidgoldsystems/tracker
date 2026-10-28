@@ -15,9 +15,9 @@ Full roadmap: month-end documents, Stripe sync, pay-per-lead charging (see the p
 
 ## Meta ads (automatic)
 
-Supabase Edge Function `meta-sync` pulls daily spend and leads for every ad account the SGS Meta system user can see into `meta_daily`. It runs every morning (pg_cron job `meta-sync-daily`, 10:20 UTC) and from **Settings → Meta ads → Sync now**.
+Supabase Edge Function `meta-sync` pulls, for every ad account the SGS Meta system user can see: daily spend and leads (`meta_daily`, leads feed pay-per-lead), the balance not yet charged and the card on file (`meta_ad_accounts`), and, for clients whose ad spend we pay, the actual card charges from the account's activity log (`money_entries`, source `meta_api`, deduped by Meta transaction ID). It runs every morning (pg_cron job `meta-sync-daily`, 10:20 UTC) and from **Settings → Meta ads → Sync now**.
 - Needs the Supabase Edge Function secret `META_ACCESS_TOKEN` (system user token with `ads_read`). Optional `META_API_VERSION` (default v23.0).
-- Ad spend on Reports = Meta charges on our cards (imported billing reports, `source = meta_csv`) plus synced daily spend after the last imported charge for that account, for clients whose ad spend setup says we pay Meta.
+- Ad spend on Reports = actual Meta charges on our cards: imported billing reports (`meta_csv`) and synced charges after that (`meta_api`). "At Meta, not yet charged" is the account balance waiting for the next billing threshold.
 - Link ad accounts to clients in Settings → Meta ads.
 
 Leads come from the detailed intake form on **websites.solidgoldsystems.com** (shown after someone books a call, plus a standalone copy at `/intake/`). The form only opens with proof checked on the server: a pass signed right after the short form, a client invite link, or a `cid` of a GHL contact tagged `lp-website-500`. That site's Netlify functions write the lead and files into Supabase; this app only reads and manages them.

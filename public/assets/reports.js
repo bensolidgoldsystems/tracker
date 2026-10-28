@@ -1,7 +1,8 @@
 /* Solid Gold Systems Tracker - Money: Overview, Reports (the bookkeeping sheet), Meta.
    Every amount lives in public.money_entries (one row per amount in a month).
-   Ad spend = Meta charges on our cards (imported billing reports) plus, after the last
-   imported charge for an account, daily spend synced from the Meta API (public.meta_daily).
+   Ad spend = actual Meta charges on our cards: imported billing reports (source meta_csv) and,
+   after that, charges pulled from Meta's activity log every morning (source meta_api).
+   Daily spend in public.meta_daily is only used for lead counts.
    tracker.js calls SGSReports.init(helpers), then:
      SGSReports.overview(el)        #overview (home)
      SGSReports.reports(el, hash)   #reports, #reports/2026
@@ -103,9 +104,6 @@
       var c = acctClient[r.ad_account_id];
       if (!c) { return; }
       if (Number(r.leads)) { add(c.id, ym(r.day), "leads", Number(r.leads)); }
-      if (weFront(c) && (!cutoff[r.ad_account_id] || r.day > cutoff[r.ad_account_id]) && Number(r.spend)) {
-        add(c.id, ym(r.day), "synced_spend", Number(r.spend));
-      }
     });
     d.cell = cell; d.cutoff = cutoff; d.acctClient = acctClient;
   }
@@ -139,6 +137,21 @@
     t.net = t.income + t.reimb - t.spend - t.payout;
     return t;
   }
+  // Spend at Meta not yet charged to the card, for a client's linked accounts.
+  function unbilled(c) {
+    var total = 0, cards = [], at = null, any = false;
+    (c.meta_ad_account_ids || []).forEach(function (id) {
+      var a = byId(d.accounts.map(function (x) { return Object.assign({ id: x.ad_account_id }, x); }), id);
+      if (!a || a.balance == null) { return; }
+      any = true; total += Number(a.balance);
+      if (a.funding_source && cards.indexOf(a.funding_source) === -1) { cards.push(a.funding_source); }
+      if (!at || a.balance_at > at) { at = a.balance_at; }
+    });
+    return any ? { amount: total, cards: cards, at: at } : null;
+  }
+  function unbilledText(u) {
+    return money(u.amount, { cents: true }) + " not yet charged" + (u.cards.length ? " (" + u.cards.join(", ") + ")" : "");
+  }
   function clientName(cid) { var c = byId(d.clients, cid); return c ? c.business_name : "No client"; }
 
   /* ======================================================================
@@ -171,6 +184,11 @@
         kpi("Revenue this month", money(t.income), compare(t.income, tp.income)) +
         kpi("Ad spend on our cards", money(t.spend), "Reimbursed " + money(t.reimb)) +
         kpi("Partner payouts", money(t.payout), "") +
+        (function () {
+          var sum = 0, n = 0;
+          d.clients.forEach(function (c) { if (weFront(c)) { var u = unbilled(c); if (u) { sum += u.amount; n++; } } });
+          return n ? kpi("At Meta, not yet charged", money(sum, { cents: true }), "Will hit our cards next") : "";
+        })() +
         kpi("Net this month", money(t.net), "Revenue + reimbursed − spend − payouts", t.net < 0 ? "bad" : "") +
         kpi("Revenue " + y + " to date", money(ytd), "") +
         kpi("Monthly recurring", money(mrr), current.length + " current clients") +
@@ -335,7 +353,7 @@
         return "<td class='" + (b < 0 ? "neg" : "pos") + (k === curKey ? " now" : "") + "'>" + money(b, { cents: true }) + "</td>";
       }).join("") + "<td class='tot'></td></tr>";
       return "<tbody class='grp'>" +
-        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + "</td></tr>" +
+        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + (unbilled(c) ? " · <b class='unb'>At Meta: " + esc(unbilledText(unbilled(c))) + "</b>" : "") + "</td></tr>" +
         (c.ad_spend_mode === "sgs_included" ? row(c, "spend", { label: "Spent (our cost)" }) :
           row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Reimbursed" }) + bal) + "</tbody>";
     }).join("");
@@ -350,7 +368,7 @@
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
       section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
         head("Client") + "<tbody>" + pplRows.map(function (c) { return row(c, "per_lead"); }).join("") + "</tbody>" + totalRow("Total pay per lead", sumCat(pplRows, "per_lead")), "per_lead") +
-      section("secAds", "Ad spend and reimbursement", "Spent = Meta charges on our cards (5978, 0719), then daily spend from Meta after the last imported charge. Balance below zero means they owe us.",
+      section("secAds", "Ad spend and reimbursement", "Spent = actual Meta charges on our cards (5978, 0719), from billing reports and synced from Meta every morning. Balance below zero means they owe us.",
         head("Client") + adBody + totalRow("Total spent", sumCat(adRows, "spend"), true).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
         totalRow("Total reimbursed", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
       section("secPay", "Pay " + partnerName, "What we paid out, by client.",
@@ -487,6 +505,7 @@
       tot.spend || weFront(c) ? ["Ad spend on our cards", money(tot.spend, { cents: true })] : null,
       tot.reimb || weFront(c) ? ["Ad spend reimbursed", money(tot.reimb, { cents: true })] : null,
       (tot.spend || tot.reimb) && c.ad_spend_mode !== "sgs_included" ? ["Ad balance", '<b class="' + (bal < 0 ? "neg" : "pos") + '">' + money(bal, { cents: true }) + "</b>" + (bal < 0 ? " owed to us" : "")] : null,
+      unbilled(c) ? ["Waiting to charge at Meta", unbilledText(unbilled(c))] : null,
       tot.payout ? ["Paid to partner", money(tot.payout)] : null
     ].filter(Boolean);
     el.innerHTML = '<div class="panel"><h2>Money <a class="btn sm" href="#reports">Reports</a></h2><dl class="kv">' +
@@ -521,7 +540,8 @@
       "<div class='addfiles' style='margin-bottom:14px'><button class='btn gold' id='metaSync'" + (configured ? "" : " disabled") + ">Sync now</button></div>" +
       "<h3 class='h3'>Ad accounts</h3><div class='acct-list'>" + (list.length ? list.map(function (a) {
         var c = d.acctClient[a.ad_account_id];
-        return "<div class='acct'><div><b>" + esc(a.name || "Ad account") + "</b><small>" + esc(a.ad_account_id) + (a.last_synced_at ? " · synced " + esc(dateShort(a.last_synced_at.slice(0, 10))) : "") +
+        return "<div class='acct'><div><b>" + esc(a.name || "Ad account") + "</b><small>" + esc(a.ad_account_id) + (a.balance != null ? " · " + esc(money(a.balance, { cents: true })) + " not yet charged" : "") + (a.funding_source ? " · " + esc(a.funding_source) : "") +
+          (a.last_synced_at ? " · synced " + esc(dateShort(a.last_synced_at.slice(0, 10))) : "") +
           (a.last_error ? " · <span style='color:var(--bad)'>" + esc(a.last_error) + "</span>" : "") + "</small></div>" +
           "<select class='inp' data-acct='" + esc(a.ad_account_id) + "' aria-label='Client for ad account " + esc(a.ad_account_id) + "'><option value=''>Not a client</option>" +
           d.clients.map(function (x) { return "<option value='" + x.id + "'" + (c && c.id === x.id ? " selected" : "") + ">" + esc(x.business_name) + "</option>"; }).join("") + "</select></div>";
