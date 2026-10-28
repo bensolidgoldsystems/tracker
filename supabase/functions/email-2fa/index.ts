@@ -11,6 +11,7 @@ const CODE_MINUTES = 10;          // code lifetime
 const MAX_ATTEMPTS = 5;           // wrong guesses per code
 const MAX_SENDS = 5;              // codes per user per 15 minutes
 const TRUST_DAYS = 30;            // how long a verified sign-in lasts (ends sooner if they sign out)
+const IDLE_MINUTES = 60;          // no activity for this long = signed out (database checks last_seen too)
 
 const url = Deno.env.get("SUPABASE_URL")!;
 function serviceKey(): string {
@@ -137,7 +138,7 @@ Deno.serve(async (req) => {
       }
       await admin.from("mfa_email_codes").update({ used_at: new Date().toISOString() }).eq("id", row.id);
       const { error: vErr } = await admin.from("verified_sessions").upsert({
-        session_id: sessionId, user_id: user.id, verified_at: new Date().toISOString(),
+        session_id: sessionId, user_id: user.id, verified_at: new Date().toISOString(), last_seen: new Date().toISOString(),
         expires_at: new Date(Date.now() + TRUST_DAYS * 86400000).toISOString(),
       }, { onConflict: "session_id" });
       if (vErr) throw vErr;
@@ -145,6 +146,16 @@ Deno.serve(async (req) => {
       await admin.from("verified_sessions").delete().lt("expires_at", new Date().toISOString());
       await admin.from("mfa_email_codes").delete().lt("created_at", new Date(Date.now() - 86400000).toISOString());
       return json(req, 200, { ok: true });
+    }
+
+    if (action === "ping") {
+      // Activity heartbeat from the Tracker. Only keeps a session alive if it hasn't already gone idle.
+      const cutoff = new Date(Date.now() - IDLE_MINUTES * 60 * 1000).toISOString();
+      const { data, error } = await admin.from("verified_sessions").update({ last_seen: new Date().toISOString() })
+        .eq("session_id", sessionId).eq("user_id", user.id)
+        .gt("expires_at", new Date().toISOString()).gt("last_seen", cutoff).select("session_id");
+      if (error) throw error;
+      return json(req, 200, { ok: true, active: (data || []).length > 0 });
     }
 
     if (action === "signout") {

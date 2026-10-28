@@ -33,6 +33,7 @@ None needed for this site (it has no server functions). The websites site holds 
 ## Sign-in and 2FA
 
 Password, then a 6-digit code emailed to them (Resend). A sign-in stays verified for 30 days or until they sign out.
+**Inactivity timeout:** no activity for 1 hour signs them out (browser timer across tabs, plus the database refuses sessions that haven't checked in for 60 minutes).
 The database only returns Tracker data to sessions that passed the code (`public.session_verified()`).
 
 Supabase Edge Functions (no Netlify credits; source in `supabase/functions/`):

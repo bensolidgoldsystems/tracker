@@ -73,6 +73,14 @@
     var s = await sb.auth.getSession();
     var session = s.data && s.data.session;
     if (!session) { showAuth(); return; }
+    var stored = 0;
+    try { stored = Number(localStorage.getItem(LAST_KEY)) || 0; } catch (e) { /* storage blocked */ }
+    if (!LINK_TYPE && stored && Date.now() - stored > IDLE_MS) {
+      try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
+      await sb.auth.signOut({ scope: "local" });
+      showAuth("Signed out after 1 hour of inactivity.");
+      return;
+    }
     var meta = session.user.user_metadata || {};
     // Invited people and password resets choose a password first.
     if (LINK_TYPE === "invite" || LINK_TYPE === "recovery" || (LINK_TYPE === "magiclink" && !meta.password_set)) {
@@ -128,6 +136,8 @@
     $("adminLink").classList.toggle("hidden", myRole !== "admin");
     $("authView").classList.add("hidden");
     $("appView").classList.remove("hidden");
+    lastPing = 0;
+    markActive(true);
     await loadLeads();
     route();
   }
@@ -160,12 +170,41 @@
   });
   async function signOut(msg) {
     try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
-    await sb.auth.signOut();
+    await sb.auth.signOut({ scope: "local" });   // this device only ("Sign out everywhere" is in Settings)
     location.hash = "";
     myRole = null;
     showAuth(msg || "Signed out.");
   }
   $("signOut").addEventListener("click", function () { signOut(); });
+
+  /* ---------- inactivity timeout: 1 hour without activity = signed out ----------
+     Shared across Tracker tabs via localStorage. While active, the Tracker pings the
+     server every 5 minutes; the database also refuses data to sessions idle for an hour. */
+  var IDLE_MS = 60 * 60 * 1000, PING_MS = 5 * 60 * 1000, LAST_KEY = "sgs-tracker-last-activity";
+  var lastLocal = Date.now(), lastPing = 0, lastMark = 0;
+  function appOpen() { return !$("appView").classList.contains("hidden"); }
+  function lastActivity() {
+    var stored = 0;
+    try { stored = Number(localStorage.getItem(LAST_KEY)) || 0; } catch (e) { /* storage blocked */ }
+    return Math.max(stored, lastLocal);
+  }
+  function markActive(force) {
+    var now = Date.now();
+    if (!force && now - lastMark < 15000) { return; }
+    lastMark = now; lastLocal = now;
+    try { localStorage.setItem(LAST_KEY, String(now)); } catch (e) { /* storage blocked */ }
+    if (appOpen() && now - lastPing > PING_MS) {
+      lastPing = now;
+      fn("email-2fa", { action: "ping" }).then(function (d) { if (d && d.active === false) { idleOut(); } }, function () { /* offline: browser timer still applies */ });
+    }
+  }
+  function idleOut() { if (appOpen()) { signOut("Signed out after 1 hour of inactivity."); } }
+  function checkIdle() { if (appOpen() && Date.now() - lastActivity() > IDLE_MS) { idleOut(); } }
+  ["mousedown", "mousemove", "keydown", "wheel", "touchstart", "scroll"].forEach(function (ev) {
+    window.addEventListener(ev, function () { markActive(false); }, { passive: true, capture: true });
+  });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) { checkIdle(); } });
+  setInterval(checkIdle, 30000);
   $("authCancel").addEventListener("click", function () { signOut(" "); });
 
   /* ---------- data ---------- */
@@ -314,7 +353,7 @@
       say("Password updated.");
       toast("Password updated");
     });
-    $("soHere").addEventListener("click", function () { signOut(); });
+    $("soHere").addEventListener("click", function () { signOut(); });   // this device only
     $("soAll").addEventListener("click", async function () {
       if (!confirm("Sign out of the Tracker on every device?")) { return; }
       try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
