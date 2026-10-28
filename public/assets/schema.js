@@ -52,6 +52,7 @@
         { id: "logo", label: "Logo", type: "files", kind: "logo", half: true, max: 5, accept: "image/*,.svg,.pdf,.ai,.eps", btn: "Upload logo", btnSub: "PNG, SVG, JPG or PDF" },
         { id: "icon", label: "Icon", type: "files", kind: "icon", half: true, max: 3, accept: "image/*,.svg,.pdf", btn: "Upload icon", btnSub: "The square/symbol version of your logo" },
         { id: "no_logo", label: "I don't have a logo / I want a new one", type: "check" },
+        { id: "brand_files", label: "Brand guide or fonts", type: "files", kind: "brand_guide", max: 5, accept: "image/*,.pdf,.ai,.eps,.otf,.ttf,.woff,.woff2,.zip", btn: "Upload brand files", btnSub: "Style guide, font files, color sheet" },
         { id: "brand_colors", label: "Brand colors", type: "text", half: true, ph: "e.g. navy and orange, or #1A2B3C" },
         { id: "inspiration_sites", label: "Websites you like", type: "text", half: true, ph: "Links, competitors or not" }
       ]
@@ -60,17 +61,21 @@
       id: "photos", num: "04", title: "Photos of Your Work", sub: "Past jobs, before/afters, products, your shop or trucks, and you and your team. Real photos convert far better than stock.",
       fields: [
         { id: "photos_link", label: "Link to your photos", labelNote: "recommended", type: "url", ph: "Google Drive, Dropbox, iCloud or Google Photos link", hint: "Make the link viewable by anyone who has it." },
-        { id: "photos", label: "Or upload them here", type: "files", kind: "photos", max: 80, accept: "image/*,video/*,.heic,.heif", btn: "Upload photos", btnSub: "Full quality. Select as many as you like." }
+        { id: "photos", label: "Or upload them here", type: "files", kind: "photos", max: 80, accept: "image/*,video/*,.heic,.heif", btn: "Upload photos", btnSub: "Full quality. Select as many as you like." },
+        { id: "before_after", label: "Before & after photos", type: "files", kind: "before_after", half: true, max: 30, accept: "image/*,video/*,.heic,.heif", btn: "Upload before & afters", btnSub: "If your work has them" },
+        { id: "headshots", label: "Owner or team photos", type: "files", kind: "headshots", half: true, max: 15, accept: "image/*,.heic,.heif", btn: "Upload headshots", btnSub: "People trust faces" }
       ]
     },
     {
-      id: "reviews", num: "05", title: "Testimonials & Reviews", sub: "Social proof is one of the biggest drivers of calls. Send whatever you've got.",
+      id: "reviews", num: "05", title: "Reviews & Credentials", sub: "Social proof is one of the biggest drivers of calls. Send whatever you've got.",
       fields: [
         { id: "google_reviews_link", label: "Google reviews link", type: "url", half: true, ph: "Link to your Google reviews" },
         { id: "other_review_sites", label: "Other review sites", type: "text", half: true, ph: "Yelp, Angi, HomeAdvisor, Houzz, Facebook." },
         { id: "testimonials", label: "Your favorite testimonials", type: "textarea", rows: 4, ph: "Paste reviews here, with the customer's first name and town if you have them." },
         { id: "review_screenshots", label: "Review screenshots", type: "files", kind: "reviews", max: 20, accept: "image/*,.pdf,.heic", btn: "Upload screenshots", btnSub: "Image or PDF" },
-        { id: "review_names", label: "Can we use customer first names with reviews?", type: "choice", options: ["Yes", "Initials only", "No names"] }
+        { id: "review_names", label: "Can we use customer first names with reviews?", type: "choice", options: ["Yes", "Initials only", "No names"] },
+        { id: "credentials", label: "Licenses, insurance, certifications & awards", type: "textarea", rows: 2, ph: "Licensed & insured, BBB A+, manufacturer certified, Best of Long Island 2025..." },
+        { id: "badges", label: "Certificates, award badges or logos", type: "files", kind: "badges", max: 15, accept: "image/*,.pdf,.heic,.svg", btn: "Upload badges", btnSub: "Certificates, award logos, association badges" }
       ]
     },
     {
@@ -102,6 +107,7 @@
       fields: [
         { id: "leads_email", label: "Where should website inquiries go?", type: "email", req: true, half: true, ph: "Email for contact form submissions" },
         { id: "contact_methods", label: "How do you want customers to reach you?", type: "multi", half: true, options: ["Call", "Text", "Form", "Book online"] },
+        { id: "tracking_ids", label: "Already using Facebook ads or Google Analytics?", type: "text", ph: "Paste your Meta Pixel ID or Google Analytics ID if you have them" },
         { id: "anything_else", label: "Anything else we should know?", type: "textarea", rows: 4, ph: "Must-haves, things you hate about your current site, deadlines..." }
       ]
     }
@@ -116,10 +122,10 @@
     { id: "reviews", label: "Review screenshots", source: "client" },
     { id: "banner", label: "Text preview banner", source: "sgs" },
     { id: "hero", label: "Hero video", source: "sgs" },
-    { id: "headshots", label: "Owner / team headshots", source: "sgs" },
-    { id: "badges", label: "Licenses, insurance, awards", source: "sgs" },
-    { id: "before_after", label: "Before / after photos", source: "sgs" },
-    { id: "brand_guide", label: "Brand / style guide", source: "sgs" },
+    { id: "headshots", label: "Owner / team headshots", source: "client" },
+    { id: "badges", label: "Licenses, insurance, awards", source: "client" },
+    { id: "before_after", label: "Before / after photos", source: "client" },
+    { id: "brand_guide", label: "Brand / style guide", source: "client" },
     { id: "other", label: "Other files", source: "sgs" }
   ];
 
@@ -138,13 +144,13 @@
       { id: "brand", label: "Brand colors and fonts / style guide", from: function (a, f) { return has(a, "brand_colors") || nfiles(f, "brand_guide") > 0; } },
       { id: "testimonials", label: "Testimonials and reviews", note: "screenshots or text", from: function (a, f) { return has(a, "testimonials") || nfiles(f, "reviews") > 0; } },
       { id: "headshots", label: "Owner or team headshots", from: function (a, f) { return nfiles(f, "headshots") > 0; } },
-      { id: "badges", label: "Licenses, insurance, certifications, awards", note: "trust badges", from: function (a, f) { return nfiles(f, "badges") > 0; } },
+      { id: "badges", label: "Licenses, insurance, certifications, awards", note: "trust badges", from: function (a, f) { return nfiles(f, "badges") > 0 || has(a, "credentials"); } },
       { id: "before_after", label: "Before/after photos", note: "if relevant", from: function (a, f) { return nfiles(f, "before_after") > 0; } }
     ]},
     { id: "info", title: "Business Info", items: [
       { id: "basics", label: "Legal name, phone, email, address, hours", from: function (a) { return has(a, "business_name") && has(a, "business_phone"); } },
       { id: "service_area", label: "Service area", note: "towns or counties", from: function (a) { return has(a, "service_area"); } },
-      { id: "license_numbers", label: "License numbers", note: "if the trade requires them", from: function (a) { return has(a, "license_number"); } },
+      { id: "license_numbers", label: "License numbers", note: "if the trade requires them", from: function (a) { return has(a, "license_number") || has(a, "credentials"); } },
       { id: "review_links", label: "Google Business Profile, Google reviews, Yelp/Angi/HomeAdvisor links", from: function (a) { return has(a, "google_business") || has(a, "google_reviews_link") || has(a, "other_review_sites"); } }
     ]},
     { id: "urls", title: "URLs", items: [
@@ -160,7 +166,7 @@
     { id: "access", title: "Access / Accounts", items: [
       { id: "dns", label: "Domain registrar login or DNS access" },
       { id: "existing_site", label: "Existing site login", note: "to pull content, set redirects", from: function (a) { return has(a, "current_website") || has(a, "lp_website_url"); } },
-      { id: "tracking", label: "Meta Pixel ID, GA4, Google Search Console" }
+      { id: "tracking", label: "Meta Pixel ID, GA4, Google Search Console", from: function (a) { return has(a, "tracking_ids"); } }
     ]},
     { id: "content", title: "Website Content", items: [
       { id: "loading_anim", label: "Loading animation" },
