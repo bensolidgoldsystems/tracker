@@ -67,19 +67,25 @@
 <div id="appView" class="hidden">
   <header class="top">
     <a href="#" class="brand" aria-label="Tracker home"><img src="/assets/logo.png" alt="Solid Gold Systems" width="110" height="36"><span>Tracker</span></a>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#clients" id="tabClients" class="tab">Clients</a>
+      <a href="#leads" id="tabLeads" class="tab">Website Leads</a>
+    </nav>
     <div class="top-actions">
-      <button class="btn sm" id="copyIntake" title="Copy the intake form link to send to a lead">Copy intake link</button>
-      <button class="btn sm" id="newLead">+ New lead</button>
       <a class="btn sm hidden" id="adminLink" href="#admin">Admin</a>
       <a class="btn sm" id="settingsLink" href="#settings">Settings</a>
       <button class="btn sm ghost" id="signOut">Sign out</button>
     </div>
   </header>
 
-  <section id="boardView">
+  <section id="clientsView" class="hidden"></section>
+  <section id="boardView" class="hidden">
     <div class="board-bar">
       <input class="inp search" id="search" type="search" placeholder="Search business, name, email..." aria-label="Search leads">
       <button class="btn sm ghost" id="refresh">Refresh</button>
+      <span class="spacer"></span>
+      <button class="btn sm" id="copyIntake" title="Copy the intake form link to send to a lead">Copy intake link</button>
+      <button class="btn sm" id="newLead">+ New lead</button>
     </div>
     <div class="board" id="board"></div>
   </section>
@@ -97,6 +103,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="/assets/config.js"></script>
 <script src="/assets/schema.js"></script>
+<script src="/assets/clients.js"></script>
 <script src="/assets/tracker.js"></script>
 </body>
 </html>

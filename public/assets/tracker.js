@@ -279,28 +279,28 @@
     location.hash = "lead/" + r.data.id;
   });
 
-  /* ---------- routing ---------- */
+  /* ---------- routing ----------
+     #  or #clients ... Clients (clients.js)   #client/<id>  #partner/<id>
+     #leads ... Website Leads board            #lead/<id>
+     #admin  #settings */
+  var VIEWS = ["clientsView", "boardView", "leadView", "adminView", "settingsView"];
+  function show(id) {
+    VIEWS.forEach(function (v) { $(v).classList.toggle("hidden", v !== id); });
+    var h = location.hash;
+    var onLeads = /^#(leads|lead\/)/.test(h), onClients = !onLeads && !/^#(admin|settings)/.test(h);
+    $("tabLeads").classList.toggle("on", onLeads);
+    $("tabClients").classList.toggle("on", onClients);
+  }
   function route() {
-    var m = location.hash.match(/^#lead\/([0-9a-f-]{36})/);
-    $("adminView").classList.add("hidden");
-    $("settingsView").classList.add("hidden");
-    if (location.hash === "#settings") {
-      current = null;
-      $("leadView").classList.add("hidden");
-      $("boardView").classList.add("hidden");
-      openSettings();
-    } else if (location.hash === "#admin" && myRole === "admin") {
-      current = null;
-      $("leadView").classList.add("hidden");
-      $("boardView").classList.add("hidden");
-      openAdmin();
-    } else if (m) { openLead(m[1]); }
-    else {
-      current = null;
-      $("leadView").classList.add("hidden");
-      $("boardView").classList.remove("hidden");
-      renderBoard();
-    }
+    var h = location.hash;
+    var m = h.match(/^#lead\/([0-9a-f-]{36})/);
+    if (!m) { current = null; }
+    if (h === "#settings") { show("settingsView"); openSettings(); }
+    else if (h === "#admin" && myRole === "admin") { show("adminView"); openAdmin(); }
+    else if (m) { show("leadView"); openLead(m[1]); }
+    else if (h === "#leads") { show("boardView"); renderBoard(); }
+    else { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
+    window.scrollTo(0, 0);
   }
   window.addEventListener("hashchange", function () { if (!$("appView").classList.contains("hidden")) { route(); } });
 
@@ -310,7 +310,7 @@
     view.classList.remove("hidden");
     var s = await sb.auth.getSession();
     var email = (s.data && s.data.session && s.data.session.user.email) || "";
-    view.innerHTML = '<a class="back" href="#">← All leads</a>' +
+    view.innerHTML = '<a class="back" href="#">← Back</a>' +
       '<div class="lead-head"><div><h1>Settings</h1></div></div>' +
       '<div class="panel"><h2>Account</h2>' +
       '<dl class="ans"><dt>Email</dt><dd>' + esc(email) + '</dd><span></span></dl>' +
@@ -323,6 +323,7 @@
       '<div class="fld hidden" id="pwNonceWrap"><label for="pwNonce">Code we just emailed you</label><input class="inp" id="pwNonce" inputmode="numeric" autocomplete="one-time-code"></div>' +
       '<div><button class="btn gold" type="submit" id="pwBtn">Update password</button></div>' +
       '</form><p class="muted" id="pwMsg" style="font-size:13px;margin-top:10px">At least 8 characters.</p></div>' +
+      '<div id="settingsExtra"></div>' +
       '<div class="panel"><h2>Sign out</h2>' +
       '<p class="muted" style="font-size:14px;margin-bottom:12px">Signing out everywhere ends your Tracker sessions on every computer and phone. You\'ll need your password and a new code to get back in.</p>' +
       '<div class="addfiles"><button class="btn" id="soHere">Sign out of this device</button><button class="btn danger" id="soAll">Sign out everywhere</button></div></div>';
@@ -354,6 +355,7 @@
       toast("Password updated");
     });
     $("soHere").addEventListener("click", function () { signOut(); });   // this device only
+    window.SGSClients.renderSettings($("settingsExtra"));
     $("soAll").addEventListener("click", async function () {
       if (!confirm("Sign out of the Tracker on every device?")) { return; }
       try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
@@ -377,7 +379,7 @@
   async function openAdmin() {
     var view = $("adminView");
     view.classList.remove("hidden");
-    view.innerHTML = '<a class="back" href="#">← All leads</a>' +
+    view.innerHTML = '<a class="back" href="#">← Back</a>' +
       '<div class="lead-head"><div><h1>Team &amp; access</h1><div class="sub">Everyone signs in with their password plus a 6-digit code emailed to them.</div></div></div>' +
       '<div class="panel"><h2>Invite someone</h2>' +
       '<form id="invForm" class="inv-row" novalidate>' +
@@ -467,9 +469,9 @@
     $("boardView").classList.add("hidden");
     var view = $("leadView");
     view.classList.remove("hidden");
-    view.innerHTML = '<a class="back" href="#">← All leads</a><p class="muted">Loading...</p>';
+    view.innerHTML = '<a class="back" href="#leads">← Website leads</a><p class="muted">Loading...</p>';
     var r = await sb.from("leads").select("*").eq("id", id).single();
-    if (r.error) { view.innerHTML = '<a class="back" href="#">← All leads</a><p class="muted">Lead not found.</p>'; return; }
+    if (r.error) { view.innerHTML = '<a class="back" href="#leads">← Website leads</a><p class="muted">Lead not found.</p>'; return; }
     var f = await sb.from("lead_files").select("*").eq("lead_id", id).order("kind").order("path");
     current = { lead: r.data, files: f.data || [], urls: {} };
     await signUrls();
@@ -492,7 +494,7 @@
     var gmail = l.email ? '<a href="mailto:' + esc(l.email) + '">' + esc(l.email) + "</a>" : "";
     var tel = l.phone ? '<a href="tel:' + esc(l.phone) + '">' + esc(l.phone) + "</a>" : "";
 
-    var html = '<a class="back" href="#">← All leads</a>' +
+    var html = '<a class="back" href="#leads">← Website leads</a>' +
       '<div class="lead-head"><div><h1>' + esc(l.business_name || "Untitled lead") + "</h1>" +
       '<div class="sub">' + [esc(l.contact_name), gmail, tel, "Submitted " + fmtDate(l.created_at)].filter(Boolean).join(" · ") +
       (l.intake_status === "uploading" ? ' · <span class="badge warn">Upload unfinished</span>' : "") + "</div></div>" +
@@ -750,11 +752,13 @@
     modal('<h2>More</h2>' +
       '<p class="muted" style="font-size:14px;margin-bottom:14px">Lead ID ' + esc(l.id) + (l.ghl_contact_id ? " · GHL contact " + esc(l.ghl_contact_id) : "") + "</p>" +
       '<div style="display:flex;flex-direction:column;gap:10px;align-items:flex-start">' +
+      '<button class="btn gold" id="mmConvert">Convert to client</button>' +
       '<button class="btn" id="mmCopy">Copy intake link pre-filled for this lead</button>' +
       '<button class="btn" id="mmClear">Delete all files (keep the info)</button>' +
       '<button class="btn danger" id="mmDel">Delete this lead completely</button></div>' +
       '<div class="mfoot"><button class="btn" id="mmClose">Close</button></div>');
     $("mmClose").onclick = closeModal;
+    $("mmConvert").onclick = function () { closeModal(); window.SGSClients.convertLead(l); };
     $("mmCopy").onclick = function () {
       var p = new URLSearchParams({ name: l.contact_name || "", email: l.email || "", phone: l.phone || "", business: l.business_name || "" });
       copyText(INTAKE_URL + "?" + p.toString()); closeModal();
@@ -765,7 +769,7 @@
       if (current.files.length) { await bucket.remove(current.files.map(function (f) { return f.path; })); }
       var r = await sb.from("leads").delete().eq("id", l.id);
       if (r.error) { fail(r.error); return; }
-      closeModal(); leads = leads.filter(function (x) { return x.id !== l.id; }); location.hash = ""; toast("Lead deleted");
+      closeModal(); leads = leads.filter(function (x) { return x.id !== l.id; }); location.hash = "leads"; toast("Lead deleted");
     };
   }
 
@@ -903,6 +907,12 @@
     btn.disabled = false;
     btn.textContent = "Export build kit (.zip)";
   }
+
+  /* ---------- clients module (clients.js) ---------- */
+  window.SGSClients.init({
+    sb: sb, $: $, esc: esc, toast: toast, fail: fail, copyText: copyText, fmtDate: fmtDate,
+    linkify: linkify, modal: modal, closeModal: closeModal
+  });
 
   /* ---------- start ---------- */
   sb.auth.onAuthStateChange(function (event) {
