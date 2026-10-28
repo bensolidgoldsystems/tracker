@@ -244,7 +244,13 @@
   function route() {
     var m = location.hash.match(/^#lead\/([0-9a-f-]{36})/);
     $("adminView").classList.add("hidden");
-    if (location.hash === "#admin" && myRole === "admin") {
+    $("settingsView").classList.add("hidden");
+    if (location.hash === "#settings") {
+      current = null;
+      $("leadView").classList.add("hidden");
+      $("boardView").classList.add("hidden");
+      openSettings();
+    } else if (location.hash === "#admin" && myRole === "admin") {
       current = null;
       $("leadView").classList.add("hidden");
       $("boardView").classList.add("hidden");
@@ -258,6 +264,66 @@
     }
   }
   window.addEventListener("hashchange", function () { if (!$("appView").classList.contains("hidden")) { route(); } });
+
+  /* ---------- settings: my account ---------- */
+  async function openSettings() {
+    var view = $("settingsView");
+    view.classList.remove("hidden");
+    var s = await sb.auth.getSession();
+    var email = (s.data && s.data.session && s.data.session.user.email) || "";
+    view.innerHTML = '<a class="back" href="#">← All leads</a>' +
+      '<div class="lead-head"><div><h1>Settings</h1></div></div>' +
+      '<div class="panel"><h2>Account</h2>' +
+      '<dl class="ans"><dt>Email</dt><dd>' + esc(email) + '</dd><span></span></dl>' +
+      '<dl class="ans"><dt>Role</dt><dd>' + (myRole === "admin" ? "Admin" : "Member") + '</dd><span></span></dl>' +
+      '<dl class="ans"><dt>Two-factor</dt><dd>On. Each new sign-in needs a 6-digit code emailed to you.</dd><span></span></dl></div>' +
+      '<div class="panel"><h2>Change password</h2>' +
+      '<form id="pwForm" class="pw-form" novalidate>' +
+      '<div class="fld"><label for="pw1">New password</label><input class="inp" id="pw1" type="password" autocomplete="new-password" minlength="8" required></div>' +
+      '<div class="fld"><label for="pw2">Confirm new password</label><input class="inp" id="pw2" type="password" autocomplete="new-password" minlength="8" required></div>' +
+      '<div class="fld hidden" id="pwNonceWrap"><label for="pwNonce">Code we just emailed you</label><input class="inp" id="pwNonce" inputmode="numeric" autocomplete="one-time-code"></div>' +
+      '<div><button class="btn gold" type="submit" id="pwBtn">Update password</button></div>' +
+      '</form><p class="muted" id="pwMsg" style="font-size:13px;margin-top:10px">At least 8 characters.</p></div>' +
+      '<div class="panel"><h2>Sign out</h2>' +
+      '<p class="muted" style="font-size:14px;margin-bottom:12px">Signing out everywhere ends your Tracker sessions on every computer and phone. You\'ll need your password and a new code to get back in.</p>' +
+      '<div class="addfiles"><button class="btn" id="soHere">Sign out of this device</button><button class="btn danger" id="soAll">Sign out everywhere</button></div></div>';
+
+    var msg = $("pwMsg");
+    function say(t, bad) { msg.textContent = t; msg.style.color = bad ? "var(--bad)" : ""; }
+    $("pwForm").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var p1 = $("pw1").value, p2 = $("pw2").value, nonce = $("pwNonce").value.trim();
+      if (p1.length < 8) { say("Use at least 8 characters.", true); return; }
+      if (p1 !== p2) { say("Passwords don't match.", true); return; }
+      var btn = $("pwBtn"); btn.disabled = true;
+      var attrs = { password: p1, data: { password_set: true } };
+      if (nonce) { attrs.nonce = nonce; }
+      var r = await sb.auth.updateUser(attrs);
+      btn.disabled = false;
+      if (r.error) {
+        // If Supabase's "secure password change" is on, it asks for a code first.
+        if (/reauthenticat/i.test(r.error.message || "") || r.error.code === "reauthentication_needed") {
+          await sb.auth.reauthenticate();
+          $("pwNonceWrap").classList.remove("hidden");
+          say("For security, we emailed you a code. Enter it above and click Update password again.");
+          return;
+        }
+        say(r.error.message, true); return;
+      }
+      $("pw1").value = ""; $("pw2").value = ""; $("pwNonce").value = ""; $("pwNonceWrap").classList.add("hidden");
+      say("Password updated.");
+      toast("Password updated");
+    });
+    $("soHere").addEventListener("click", function () { signOut(); });
+    $("soAll").addEventListener("click", async function () {
+      if (!confirm("Sign out of the Tracker on every device?")) { return; }
+      try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
+      await sb.auth.signOut({ scope: "global" });
+      location.hash = "";
+      myRole = null;
+      showAuth("Signed out everywhere.");
+    });
+  }
 
   /* ---------- admin: team & access ---------- */
   function ago(d) {
