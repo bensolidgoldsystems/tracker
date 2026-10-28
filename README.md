@@ -30,10 +30,18 @@ public/assets/config.js      Public Supabase URL + anon key
 
 None needed for this site (it has no server functions). The websites site holds `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GHL_TOKEN`, `GHL_LOCATION_ID`.
 
+## Sign-in and 2FA
+
+Password, then a 6-digit code emailed to them (Resend). A sign-in stays verified for 30 days or until they sign out.
+The database only returns Tracker data to sessions that passed the code (`public.session_verified()`).
+
+Supabase Edge Functions (no Netlify credits; source in `supabase/functions/`):
+- `email-2fa`: sends and checks the codes. Needs the Supabase secret `RESEND_API_KEY`.
+- `admin-users`: Admin page actions (list, invite, copy invite link, change role, sign out, remove). Admins only.
+
 ## Giving someone access
 
-1. Supabase → Authentication → Users → Add user (email + password, auto-confirm).
-2. Add their email to the `team_members` table.
+Tracker → **Admin** → Invite someone. They get an email (sent by Supabase Auth through Resend SMTP), choose a password, then confirm an emailed code. If the email can't be sent, the Admin page gives you a one-time link to send yourself.
 
 ## Intake link for GHL texts/emails
 

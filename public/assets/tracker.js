@@ -2,6 +2,8 @@
 (function () {
   "use strict";
   var S = window.SGS_SCHEMA, C = window.SGS_CONFIG;
+  // Read the sign-in link type (invite / recovery / magiclink) before Supabase clears the URL.
+  var LINK_TYPE = (location.hash.match(/[#&]type=([a-z_]+)/) || [])[1] || "";
   var sb = window.supabase.createClient(C.supabaseUrl, C.supabaseAnonKey);
   var bucket = sb.storage.from(C.bucket);
   var $ = function (id) { return document.getElementById(id); };
@@ -42,14 +44,78 @@
     return { total: total, done: done, pct: total ? Math.round(done / total * 100) : 0, a: a, cl: cl, files: files || [] };
   }
 
-  /* ---------- auth ---------- */
-  function showAuth(msg, bad) {
+  /* ---------- auth: password -> email code -> team check ---------- */
+  var AUTH_STEPS = ["loginForm", "resetForm", "mfaForm"];
+  function showStep(id, msg, bad) {
     $("appView").classList.add("hidden");
     $("authView").classList.remove("hidden");
+    AUTH_STEPS.forEach(function (s) { $(s).classList.toggle("hidden", s !== id); });
+    $("authCancel").classList.toggle("hidden", id === "loginForm");
     $("authMsg").textContent = msg || "";
     $("authMsg").classList.toggle("bad", !!bad);
+    var first = $(id).querySelector("input");
+    if (first) { setTimeout(function () { first.focus(); }, 50); }
+  }
+  function showAuth(msg, bad) { showStep("loginForm", msg, bad); }
+
+  /* Call one of our Supabase Edge Functions; throws with the function's own error message. */
+  async function fn(name, body) {
+    var r = await sb.functions.invoke(name, { body: body });
+    if (r.error) {
+      var msg = r.error.message;
+      try { var j = await r.error.context.json(); msg = j.error || msg; } catch (e) { /* keep default */ }
+      throw new Error(msg);
+    }
+    return r.data;
   }
 
+  async function gate() {
+    var s = await sb.auth.getSession();
+    var session = s.data && s.data.session;
+    if (!session) { showAuth(); return; }
+    var meta = session.user.user_metadata || {};
+    // Invited people and password resets choose a password first.
+    if (LINK_TYPE === "invite" || LINK_TYPE === "recovery" || (LINK_TYPE === "magiclink" && !meta.password_set)) {
+      $("resetTitle").textContent = LINK_TYPE === "recovery" ? "Choose a new password" : "Welcome! Choose a password";
+      showStep("resetForm");
+      return;
+    }
+    var v = await sb.rpc("session_verified");
+    if (v.data === true) { enterApp(); return; }
+    sendCode(true);
+  }
+
+  var resendAt = 0;
+  async function sendCode(first) {
+    showStep("mfaForm", "Sending code...");
+    $("mfaCode").value = "";
+    try {
+      var d = await fn("email-2fa", { action: "send" });
+      $("mfaSent").textContent = "We emailed a 6-digit code to " + d.sent_to + ". It expires in 10 minutes.";
+      $("authMsg").textContent = first ? "" : "New code sent.";
+      $("authMsg").classList.remove("bad");
+      resendAt = Date.now() + 30000;
+    } catch (e) {
+      $("authMsg").textContent = e.message;
+      $("authMsg").classList.add("bad");
+      if (/access/i.test(e.message)) { await sb.auth.signOut(); showAuth(e.message, true); }
+    }
+  }
+  $("resendCode").addEventListener("click", function () {
+    var wait = Math.ceil((resendAt - Date.now()) / 1000);
+    if (wait > 0) { $("authMsg").textContent = "You can request a new code in " + wait + "s."; return; }
+    sendCode(false);
+  });
+  $("mfaForm").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var code = $("mfaCode").value.replace(/\D/g, "");
+    if (code.length !== 6) { $("authMsg").textContent = "Enter the 6-digit code."; $("authMsg").classList.add("bad"); return; }
+    $("authMsg").textContent = "Checking..."; $("authMsg").classList.remove("bad");
+    try { await fn("email-2fa", { action: "verify", code: code }); enterApp(); }
+    catch (err) { $("authMsg").textContent = err.message; $("authMsg").classList.add("bad"); }
+  });
+
+  var myRole = null;
   async function enterApp() {
     var r = await sb.rpc("is_team");
     if (r.error || !r.data) {
@@ -57,6 +123,9 @@
       showAuth("This account doesn't have Tracker access.", true);
       return;
     }
+    var role = await sb.rpc("my_role");
+    myRole = role.data || "member";
+    $("adminLink").classList.toggle("hidden", myRole !== "admin");
     $("authView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     await loadLeads();
@@ -66,9 +135,11 @@
   $("loginForm").addEventListener("submit", async function (e) {
     e.preventDefault();
     $("authMsg").textContent = "Signing in...";
+    $("authMsg").classList.remove("bad");
     var r = await sb.auth.signInWithPassword({ email: $("loginEmail").value.trim(), password: $("loginPass").value });
     if (r.error) { showAuth(r.error.message, true); return; }
-    enterApp();
+    LINK_TYPE = "";
+    gate();
   });
   $("forgotBtn").addEventListener("click", async function () {
     var email = $("loginEmail").value.trim();
@@ -78,12 +149,24 @@
   });
   $("resetForm").addEventListener("submit", async function (e) {
     e.preventDefault();
-    var r = await sb.auth.updateUser({ password: $("newPass").value });
-    if (r.error) { showAuth(r.error.message, true); return; }
-    $("resetForm").classList.add("hidden"); $("loginForm").classList.remove("hidden");
-    toast("Password saved"); enterApp();
+    var p1 = $("newPass").value, p2 = $("newPass2").value;
+    if (p1.length < 8) { $("authMsg").textContent = "Use at least 8 characters."; $("authMsg").classList.add("bad"); return; }
+    if (p1 !== p2) { $("authMsg").textContent = "Passwords don't match."; $("authMsg").classList.add("bad"); return; }
+    var r = await sb.auth.updateUser({ password: p1, data: { password_set: true } });
+    if (r.error) { $("authMsg").textContent = r.error.message; $("authMsg").classList.add("bad"); return; }
+    LINK_TYPE = "";
+    toast("Password saved");
+    gate();
   });
-  $("signOut").addEventListener("click", async function () { await sb.auth.signOut(); location.hash = ""; showAuth("Signed out."); });
+  async function signOut(msg) {
+    try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
+    await sb.auth.signOut();
+    location.hash = "";
+    myRole = null;
+    showAuth(msg || "Signed out.");
+  }
+  $("signOut").addEventListener("click", function () { signOut(); });
+  $("authCancel").addEventListener("click", function () { signOut(" "); });
 
   /* ---------- data ---------- */
   async function loadLeads() {
@@ -160,7 +243,13 @@
   /* ---------- routing ---------- */
   function route() {
     var m = location.hash.match(/^#lead\/([0-9a-f-]{36})/);
-    if (m) { openLead(m[1]); }
+    $("adminView").classList.add("hidden");
+    if (location.hash === "#admin" && myRole === "admin") {
+      current = null;
+      $("leadView").classList.add("hidden");
+      $("boardView").classList.add("hidden");
+      openAdmin();
+    } else if (m) { openLead(m[1]); }
     else {
       current = null;
       $("leadView").classList.add("hidden");
@@ -169,6 +258,104 @@
     }
   }
   window.addEventListener("hashchange", function () { if (!$("appView").classList.contains("hidden")) { route(); } });
+
+  /* ---------- admin: team & access ---------- */
+  function ago(d) {
+    if (!d) { return "Never"; }
+    var s = (Date.now() - new Date(d).getTime()) / 1000;
+    if (s < 3600) { return Math.max(1, Math.round(s / 60)) + " min ago"; }
+    if (s < 86400) { return Math.round(s / 3600) + " hr ago"; }
+    if (s < 86400 * 14) { return Math.round(s / 86400) + " days ago"; }
+    return fmtDate(d);
+  }
+
+  async function openAdmin() {
+    var view = $("adminView");
+    view.classList.remove("hidden");
+    view.innerHTML = '<a class="back" href="#">← All leads</a>' +
+      '<div class="lead-head"><div><h1>Team &amp; access</h1><div class="sub">Everyone signs in with their password plus a 6-digit code emailed to them.</div></div></div>' +
+      '<div class="panel"><h2>Invite someone</h2>' +
+      '<form id="invForm" class="inv-row" novalidate>' +
+      '<div class="fld"><label for="invEmail">Email</label><input class="inp" id="invEmail" type="email" placeholder="name@solidgoldsystems.com" required></div>' +
+      '<div class="fld"><label for="invRole">Role</label><select class="inp" id="invRole"><option value="member">Member</option><option value="admin">Admin</option></select></div>' +
+      '<button class="btn gold" type="submit" id="invBtn">Send invite</button></form>' +
+      '<p class="muted" style="font-size:13px;margin-top:10px"><b>Members</b> can see and work on all leads. <b>Admins</b> can also invite and remove people.</p>' +
+      '<div id="invResult"></div></div>' +
+      '<div class="panel"><h2>Team <span class="muted" id="teamCount" style="font-family:var(--body);font-size:13px"></span></h2><div id="teamList"><p class="muted">Loading...</p></div></div>';
+    $("invForm").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var email = $("invEmail").value.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Enter a valid email"); return; }
+      var btn = $("invBtn"); btn.disabled = true; btn.textContent = "Sending...";
+      try {
+        var d = await fn("admin-users", { action: "invite", email: email, role: $("invRole").value });
+        $("invEmail").value = "";
+        showInviteResult(email, d);
+        loadTeam();
+      } catch (err) { fail(err); }
+      btn.disabled = false; btn.textContent = "Send invite";
+    });
+    loadTeam();
+  }
+
+  function showInviteResult(email, d) {
+    var box = $("invResult");
+    if (d.emailed) {
+      box.innerHTML = '<div class="inv-ok">Invitation emailed to <b>' + esc(email) + "</b>. They'll choose a password, then confirm a code sent to their email.</div>";
+      return;
+    }
+    box.innerHTML = '<div class="inv-link"><p>' + (d.note && /account/.test(d.note) ? esc(d.note) : "The email couldn't be sent" + (d.note ? " (" + esc(d.note) + ")" : "") + ". Send them this link yourself:") + "</p>" +
+      '<div class="addfiles"><input class="inp" readonly value="' + esc(d.link) + '" id="invLinkVal"><button class="btn" type="button" id="invCopy">Copy link</button></div>' +
+      '<p class="muted" style="font-size:12px;margin-top:6px">The link works once and expires in 24 hours.</p></div>';
+    $("invCopy").addEventListener("click", function () { copyText(d.link); });
+  }
+
+  async function loadTeam() {
+    var list = $("teamList");
+    try {
+      var d = await fn("admin-users", { action: "list" });
+      var m = d.members || [];
+      $("teamCount").textContent = m.length + (m.length === 1 ? " person" : " people");
+      list.innerHTML = '<div class="team">' + m.map(function (u) {
+        var status = u.status === "active" ? '<span class="badge ok">Active</span>' : u.status === "invited" ? '<span class="badge warn">Invite pending</span>' : '<span class="badge">No account</span>';
+        return '<div class="team-row" data-email="' + esc(u.email) + '">' +
+          '<div class="team-who"><b>' + esc(u.email) + "</b>" + (u.is_me ? ' <span class="badge gold">You</span>' : "") +
+          '<small>' + status + " · Last sign-in " + esc(ago(u.last_sign_in_at)) + (u.invited_by ? " · Invited by " + esc(u.invited_by) : "") + "</small></div>" +
+          '<select class="inp team-role" aria-label="Role for ' + esc(u.email) + '"' + (u.is_me ? " disabled" : "") + ">" +
+          '<option value="member"' + (u.role === "member" ? " selected" : "") + '>Member</option><option value="admin"' + (u.role === "admin" ? " selected" : "") + ">Admin</option></select>" +
+          '<div class="team-actions">' +
+          (u.status !== "active" ? '<button class="btn sm" data-act="link">Copy invite link</button>' : "") +
+          (u.status === "active" && !u.is_me ? '<button class="btn sm ghost" data-act="sign_out" title="They will need a new email code next time">Sign out</button>' : "") +
+          (u.is_me ? "" : '<button class="btn sm ghost danger" data-act="remove">Remove</button>') +
+          "</div></div>";
+      }).join("") + "</div>";
+      list.querySelectorAll(".team-row").forEach(function (row) {
+        var email = row.dataset.email;
+        var sel = row.querySelector(".team-role");
+        sel.addEventListener("change", async function () {
+          try { await fn("admin-users", { action: "set_role", email: email, role: sel.value }); toast(email + " is now " + (sel.value === "admin" ? "an admin" : "a member")); }
+          catch (err) { fail(err); loadTeam(); }
+        });
+        row.querySelectorAll("[data-act]").forEach(function (b) {
+          b.addEventListener("click", async function () {
+            var act = b.dataset.act;
+            if (act === "remove" && !confirm("Remove " + email + " from the Tracker? Their account is deleted and they lose access right away.")) { return; }
+            if (act === "sign_out" && !confirm("Sign " + email + " out? They'll need a new email code to get back in.")) { return; }
+            b.disabled = true;
+            try {
+              var d = await fn("admin-users", { action: act, email: email });
+              if (act === "link") { copyText(d.link); toast("Invite link copied. It works once and expires in 24 hours.", 4000); }
+              if (act === "sign_out") { toast(email + " signed out"); }
+              if (act === "remove") { toast(email + " removed"); loadTeam(); }
+            } catch (err) { fail(err); }
+            b.disabled = false;
+          });
+        });
+      });
+    } catch (err) {
+      list.innerHTML = '<p class="muted">' + esc(err.message) + "</p>";
+    }
+  }
 
   /* ---------- lead detail ---------- */
   async function openLead(id) {
@@ -614,15 +801,7 @@
 
   /* ---------- start ---------- */
   sb.auth.onAuthStateChange(function (event) {
-    if (event === "PASSWORD_RECOVERY") {
-      $("appView").classList.add("hidden");
-      $("authView").classList.remove("hidden");
-      $("loginForm").classList.add("hidden");
-      $("resetForm").classList.remove("hidden");
-    }
+    if (event === "PASSWORD_RECOVERY") { LINK_TYPE = "recovery"; gate(); }
   });
-  sb.auth.getSession().then(function (r) {
-    if (location.hash.indexOf("type=recovery") !== -1) { return; }
-    if (r.data && r.data.session) { enterApp(); } else { showAuth(); }
-  });
+  gate();
 })();

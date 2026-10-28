@@ -137,3 +137,30 @@ textarea.notes{min-height:140px}
   .brand img{display:none}
   .brand span{border:0;padding:0}
 }
+
+/* sign-in steps */
+.auth-step{font-family:var(--display);font-size:24px;letter-spacing:.03em;text-align:center;color:var(--text)}
+.auth-card form .muted{font-size:13px;text-align:center}
+.inp.code{font-size:24px;letter-spacing:.4em;text-align:center;font-variant-numeric:tabular-nums}
+#resendCode{display:block;margin:0 auto}
+
+/* admin */
+#adminView{padding:18px clamp(16px,3vw,32px) 60px;max-width:1100px;margin:0 auto}
+.inv-row{display:grid;grid-template-columns:minmax(0,1fr) 160px auto;gap:12px;align-items:end}
+.inv-ok,.inv-link{margin-top:14px;padding:12px 14px;border-radius:8px;font-size:14px}
+.inv-ok{background:rgba(91,208,138,.1);border:1px solid rgba(91,208,138,.35)}
+.inv-link{background:var(--gold-soft);border:1px solid var(--gold-line)}
+.inv-link p{margin-bottom:8px}
+.inv-link .inp{flex:1;min-width:0;font-size:12px}
+.badge.ok{background:rgba(91,208,138,.15);color:var(--ok)}
+.team-row{display:grid;grid-template-columns:minmax(0,1fr) 130px auto;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.team-row:first-child{border-top:0}
+.team-who{min-width:0;word-break:break-all}
+.team-who small{display:block;color:var(--faint);font-size:12px;margin-top:3px;word-break:normal}
+.team-role{padding:8px 30px 8px 10px}
+.team-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+@media (max-width:700px){
+  .inv-row{grid-template-columns:1fr}
+  .team-row{grid-template-columns:1fr}
+  .team-actions{justify-content:flex-start}
+}
