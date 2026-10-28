@@ -268,7 +268,7 @@
   }
   $("search").addEventListener("input", renderBoard);
   $("refresh").addEventListener("click", function () { loadLeads().then(function () { toast("Refreshed"); }); });
-  $("copyIntake").addEventListener("click", function () { copyText(INTAKE_URL); });
+  $("copyIntake").addEventListener("click", function () { copyText("https://websites.solidgoldsystems.com/"); });
   $("newLead").addEventListener("click", async function () {
     var name = prompt("Business name for the new lead:");
     if (!name) { return; }
@@ -754,14 +754,14 @@
       '<p class="muted" style="font-size:14px;margin-bottom:14px">Lead ID ' + esc(l.id) + (l.ghl_contact_id ? " · GHL contact " + esc(l.ghl_contact_id) : "") + "</p>" +
       '<div style="display:flex;flex-direction:column;gap:10px;align-items:flex-start">' +
       (l.client_id ? '<a class="btn gold" href="#client/' + esc(l.client_id) + '" id="mmConvert">Open client</a>' : '<button class="btn gold" id="mmConvert">Convert to client</button>') +
-      '<button class="btn" id="mmCopy">Copy intake link pre-filled for this lead</button>' +
+      (l.ghl_contact_id ? '<button class="btn" id="mmCopy">Copy form link for this lead</button>' : "") +
       '<button class="btn" id="mmClear">Delete all files (keep the info)</button>' +
       '<button class="btn danger" id="mmDel">Delete this lead completely</button></div>' +
       '<div class="mfoot"><button class="btn" id="mmClose">Close</button></div>');
     $("mmClose").onclick = closeModal;
     $("mmConvert").onclick = function (e) { if (l.client_id) { closeModal(); return; } e.preventDefault(); closeModal(); window.SGSClients.convertLead(l); };
-    $("mmCopy").onclick = function () {
-      var p = new URLSearchParams({ name: l.contact_name || "", email: l.email || "", phone: l.phone || "", business: l.business_name || "" });
+    if ($("mmCopy")) $("mmCopy").onclick = function () {
+      var p = new URLSearchParams({ cid: l.ghl_contact_id, name: l.contact_name || "", email: l.email || "", phone: l.phone || "", business: l.business_name || "" });
       copyText(INTAKE_URL + "?" + p.toString()); closeModal();
     };
     $("mmClear").onclick = function () { closeModal(); deleteFiles(current.files.slice()); };
