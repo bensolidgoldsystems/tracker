@@ -298,7 +298,8 @@
         var dates = (x.start_date ? "From " + dateLong(x.start_date) : "") + (x.end_date ? " to " + dateLong(x.end_date) : "");
         return '<button class="svc-row' + (x.status === "active" ? "" : " off") + '" data-cs="' + x.id + '">' +
           '<span class="svc-main"><b>' + esc(s.name || "Service") + (x.tier ? " · " + esc(x.tier) : "") + "</b>" +
-          "<small>" + esc(BILLING[x.billing_type]) + (x.billed_to === "partner" ? " · billed to partner" : "") + (dates ? " · " + esc(dates) : "") + (x.notes ? " · " + esc(x.notes) : "") + "</small></span>" +
+          "<small>" + esc(BILLING[x.billing_type]) + (x.billed_to === "partner" ? " · billed to partner" : "") + (dates ? " · " + esc(dates) : "") + (x.notes ? " · " + esc(x.notes) : "") + "</small>" +
+          (x.cost != null && x.cost_partner_id ? '<small class="payout">We pay ' + esc((partner(x.cost_partner_id) || {}).name || "partner") + " " + esc(money(x.cost)) + " · margin " + esc(money(Number(x.price || 0) - Number(x.cost || 0))) + "</small>" : "") + "</span>" +
           '<span class="svc-price">' + esc(priceLabel(x)) + (x.status === "active" ? "" : '<small>' + esc(CS_STATUS[x.status]) + "</small>") + "</span></button>";
       }).join("") + "</div>" : '<p class="muted" style="font-size:14px">No services yet. Add what this client gets, at their price.</p>') +
       "</div>";
@@ -420,6 +421,8 @@
       fld("esStatus", "Status", sel("esStatus", Object.keys(CS_STATUS).map(function (k) { return [k, CS_STATUS[k]]; }), cur.status)) +
       fld("esStart", "Start date", inp("esStart", cur.start_date || "", ' type="date"')) +
       fld("esEnd", "End date", inp("esEnd", cur.end_date || "", ' type="date"')) +
+      fld("esPayP", "We pay out to", '<select class="inp" id="esPayP"><option value="">Nobody (we deliver it)</option>' + data.partners.map(function (pp) { return '<option value="' + pp.id + '"' + (pp.id === cur.cost_partner_id ? " selected" : "") + ">" + esc(pp.name) + "</option>"; }).join("") + "</select>") +
+      '<div class="fld" id="esPayW"><label for="esPay">Payout amount</label><div class="money-in"><span>$</span><input class="inp" id="esPay" inputmode="decimal" value="' + esc(cur.cost == null ? "" : cur.cost) + '"><em id="esPayPer"></em></div></div>' +
       fld("esNotes", "Notes", inp("esNotes", cur.notes, ' placeholder="e.g. included in package, 2 posts/month"'), true) +
       "</div><div id='esHistory'></div>" +
       "<div class='mfoot'>" + (x ? "<button class='btn danger' id='mDel' style='margin-right:auto'>Remove</button>" : "") +
@@ -435,7 +438,15 @@
       if (!first && !x && s.default_price != null) { $("esPrice").value = s.default_price; }
       syncPer();
     }
-    function syncPer() { var t = $("esType").value; $("esPer").textContent = t === "monthly" ? "/ month" : t === "per_lead" ? "/ lead" : "total"; }
+    function syncPer() {
+      var t = $("esType").value, per = t === "monthly" ? "/ month" : t === "per_lead" ? "/ lead" : "total";
+      $("esPer").textContent = per; $("esPayPer").textContent = per;
+      $("esPayW").classList.toggle("hidden", !$("esPayP").value);
+    }
+    $("esPayP").onchange = function () {
+      if ($("esPayP").value && !$("esPay").value) { var s0 = svc($("esSvc").value) || {}; if (/video/i.test(s0.name || "")) { $("esPay").value = 600; } }
+      syncPer();
+    };
     $("esSvc").onchange = function () { syncSvc(false); };
     $("esType").onchange = syncPer;
     syncSvc(true);
@@ -465,7 +476,9 @@
       var row = {
         service_id: $("esSvc").value, billing_type: $("esType").value, price: price, tier: $("esTier").value.trim(),
         billed_to: $("esBilled") ? $("esBilled").value : "client", status: $("esStatus").value,
-        start_date: $("esStart").value || null, end_date: $("esEnd").value || null, notes: $("esNotes").value.trim()
+        start_date: $("esStart").value || null, end_date: $("esEnd").value || null, notes: $("esNotes").value.trim(),
+        cost_partner_id: $("esPayP").value || null,
+        cost: $("esPayP").value ? (parseFloat(String($("esPay").value).replace(/[$,\s]/g, "")) || 0) : null
       };
       try {
         if (x) { await q(T.sb.from("client_services").update(row).eq("id", x.id)); }
@@ -610,10 +623,13 @@
       return s + clientServices(c.id).filter(function (x) { return x.status === "active" && x.billed_to === "partner" && x.billing_type === "monthly"; })
         .reduce(function (t, x) { return t + Number(x.price || 0); }, 0);
     }, 0);
+    var payouts = data.cs.filter(function (x) { return x.cost_partner_id === p.id && x.cost != null; });
+    var payMonthly = payouts.filter(function (x) { var cl = byId(data.clients, x.client_id); return x.status === "active" && x.billing_type === "monthly" && cl && status(cl) !== "churned" && status(cl) !== "paused"; })
+      .reduce(function (s, x) { return s + Number(x.cost || 0); }, 0);
     el.innerHTML = '<div class="cl-wrap"><a class="back" href="#clients">← Clients</a>' +
       '<div class="lead-head"><div><h1>' + esc(p.name) + '</h1><div class="sub">Partner · pays by ' + esc(PAY[p.payment_method] || p.payment_method) + "</div></div>" +
       '<div class="lead-actions"><button class="btn" id="pEdit">Edit partner</button></div></div>' +
-      '<div class="stats">' + stat("Clients", theirs.filter(function (c) { return status(c) !== "churned"; }).length) + stat("Expected per month", money(owed)) + stat("Default rate", money(p.default_monthly_rate) + "/client") + "</div>" +
+      '<div class="stats">' + stat("Clients", theirs.filter(function (c) { return status(c) !== "churned"; }).length) + stat("Expected per month", money(owed)) + stat("Default rate", money(p.default_monthly_rate) + "/client") + stat("We pay them / month", money(payMonthly)) + "</div>" +
       '<div class="panel"><h2>Clients</h2>' +
       (theirs.length ? theirs.map(function (c) {
         var mine = clientServices(c.id).filter(function (x) { return x.status === "active"; });
@@ -624,6 +640,12 @@
           '<span class="cl-money">' + (direct.length ? "<b>" + direct.length + " upsell" + (direct.length > 1 ? "s" : "") + "</b><small>billed to client</small>" : '<span class="muted">—</span>') + "</span></a>";
       }).join("") : '<p class="muted" style="font-size:14px">No clients linked yet. Pick this partner when creating or editing a client.</p>') +
       "</div>" +
+      '<div class="panel"><h2>We pay ' + esc(p.name) + "</h2>" +
+      (payouts.length ? payouts.map(function (x) {
+        var cl = byId(data.clients, x.client_id) || {}, s0 = svc(x.service_id) || {};
+        return '<a class="svc-row' + (x.status === "active" ? "" : " off") + '" href="#client/' + cl.id + '"><span class="svc-main"><b>' + esc(cl.business_name || "") + "</b><small>" + esc(s0.name || "") + " · " + esc(BILLING[x.billing_type]) + (x.status === "active" ? "" : " · " + esc(CS_STATUS[x.status])) + "</small></span>" +
+          '<span class="svc-price">' + esc(money(x.cost)) + (x.billing_type === "monthly" ? "/mo" : "") + "</span></a>";
+      }).join("") : '<p class="muted" style="font-size:14px">Nothing yet. On a service (e.g. a video shoot), set "We pay out to" ' + esc(p.name) + ".</p>") + "</div>" +
       '<div class="panel"><h2>Details</h2>' +
       '<dl class="ans"><dt>Contact</dt><dd>' + esc([p.contact_name, p.email, p.phone].filter(Boolean).join(" · ") || "—") + "</dd><span></span></dl>" +
       '<dl class="ans"><dt>Stripe name suffix</dt><dd>' + (p.stripe_suffix ? "Customers named “Client - " + esc(p.stripe_suffix) + "”" : "—") + "</dd><span></span></dl>" +
