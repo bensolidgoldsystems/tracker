@@ -197,11 +197,11 @@
     var dayOfMonth = new Date().getDate();
     // Ad spend we fronted that hasn't been reimbursed.
     d.clients.forEach(function (c) {
+      if (c.ad_spend_mode === "sgs_included") { return; }   // our cost, nothing to collect
       if (!weFront(c) && !hasAny(c.id, ["ad_spend", "synced_spend"], key.slice(0, 4))) { return; }
       var b = adBalance(c.id, key);
       if (b < -25) {
-        items.push({ pri: 1, html: '<b>' + esc(c.business_name) + "</b> owes " + money(-b, { cents: true }) + " in ad spend we fronted" +
-          (c.ad_spend_mode === "sgs_included" ? " (built into their price)" : "") + ' <a href="#reports">Reports</a>' });
+        items.push({ pri: 1, html: '<b>' + esc(c.business_name) + "</b> owes " + money(-b, { cents: true }) + " in ad spend we fronted" + ' <a href="#reports">Reports</a>' });
       }
     });
     // Active monthly clients with nothing recorded this month (after the 5th).
@@ -336,7 +336,8 @@
       }).join("") + "<td class='tot'></td></tr>";
       return "<tbody class='grp'>" +
         "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + "</td></tr>" +
-        row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Reimbursed" }) + bal + "</tbody>";
+        (c.ad_spend_mode === "sgs_included" ? row(c, "spend", { label: "Spent (our cost)" }) :
+          row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Reimbursed" }) + bal) + "</tbody>";
     }).join("");
 
     var partnerName = (d.partners[0] || {}).name || "partner";
@@ -485,7 +486,7 @@
       tot.leads ? ["Leads from Meta " + y, String(tot.leads)] : null,
       tot.spend || weFront(c) ? ["Ad spend on our cards", money(tot.spend, { cents: true })] : null,
       tot.reimb || weFront(c) ? ["Ad spend reimbursed", money(tot.reimb, { cents: true })] : null,
-      tot.spend || tot.reimb ? ["Ad balance", '<b class="' + (bal < 0 ? "neg" : "pos") + '">' + money(bal, { cents: true }) + "</b>" + (bal < 0 ? " owed to us" : "")] : null,
+      (tot.spend || tot.reimb) && c.ad_spend_mode !== "sgs_included" ? ["Ad balance", '<b class="' + (bal < 0 ? "neg" : "pos") + '">' + money(bal, { cents: true }) + "</b>" + (bal < 0 ? " owed to us" : "")] : null,
       tot.payout ? ["Paid to partner", money(tot.payout)] : null
     ].filter(Boolean);
     el.innerHTML = '<div class="panel"><h2>Money <a class="btn sm" href="#reports">Reports</a></h2><dl class="kv">' +
