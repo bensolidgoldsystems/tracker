@@ -53,23 +53,42 @@
   }
   // Monthly recurring for one client: active monthly services (paused clients count as 0).
   function monthlyOf(client) {
-    if (client.status === "churned" || client.status === "paused") { return 0; }
+    if (status(client) === "churned" || status(client) === "paused") { return 0; }
     return clientServices(client.id).filter(function (x) { return x.status === "active" && x.billing_type === "monthly"; })
       .reduce(function (s, x) { return s + Number(x.price || 0); }, 0);
   }
   function perLeadOf(client) {
     return clientServices(client.id).filter(function (x) { return x.status === "active" && x.billing_type === "per_lead"; });
   }
-  function adsLiveSince(clientId) {
-    var ev = data.events.filter(function (e) { return e.client_id === clientId && (e.kind === "launched" || e.kind === "relaunched"); })
-      .sort(function (a, b) { return a.event_date < b.event_date ? -1 : 1; });
-    return ev.length ? ev[0].event_date : null;
-  }
-  function adsState(clientId) {
-    var ev = data.events.filter(function (e) { return e.client_id === clientId && e.kind !== "note"; })
+  function adEvents(clientId, includeFuture) {
+    var t = today();
+    return data.events.filter(function (e) { return e.client_id === clientId && e.kind !== "note" && (includeFuture || e.event_date <= t); })
       .sort(function (a, b) { return a.event_date < b.event_date ? 1 : a.event_date > b.event_date ? -1 : (a.created_at < b.created_at ? 1 : -1); });
+  }
+  // Start of the current live stretch (most recent launch/relaunch), or null.
+  function adsLiveSince(clientId) {
+    var ev = adEvents(clientId);
+    if (!ev.length || (ev[0].kind !== "launched" && ev[0].kind !== "relaunched")) { return null; }
+    return ev[0].event_date;
+  }
+  // "live", "paused", "stopped" or null, as of today.
+  function adsState(clientId) {
+    var ev = adEvents(clientId);
     if (!ev.length) { return null; }
     return ev[0].kind === "launched" || ev[0].kind === "relaunched" ? "live" : ev[0].kind;
+  }
+  function nextScheduled(clientId) {
+    var t = today();
+    var ev = data.events.filter(function (e) { return e.client_id === clientId && e.kind !== "note" && e.event_date > t; })
+      .sort(function (a, b) { return a.event_date < b.event_date ? -1 : 1; });
+    return ev[0] || null;
+  }
+  // Active/Paused follow the ads switch (including scheduled dates once they arrive).
+  function status(c) {
+    if (c.status !== "active" && c.status !== "paused") { return c.status; }
+    var st = adsState(c.id);
+    if (!st) { return c.status; }
+    return st === "live" ? "active" : "paused";
   }
   async function q(promise) {
     var r = await promise;
@@ -104,7 +123,7 @@
 
   /* ================= CLIENT LIST ================= */
   function renderList() {
-    var current = data.clients.filter(function (c) { return c.status !== "churned"; });
+    var current = data.clients.filter(function (c) { return status(c) !== "churned"; });
     var mrr = current.reduce(function (s, c) { return s + monthlyOf(c); }, 0);
     var ppl = current.filter(function (c) { return perLeadOf(c).length; }).length;
     var viaPartner = current.filter(function (c) { return c.partner_id; }).length;
@@ -113,8 +132,9 @@
       '<div class="cl-wrap">' +
       '<div class="cl-head"><h1>Clients</h1><div class="cl-actions"><button class="btn gold" id="newClient">+ New client</button></div></div>' +
       '<div class="stats">' +
-        stat("Active clients", data.clients.filter(function (c) { return c.status === "active"; }).length) +
-        stat("Onboarding", data.clients.filter(function (c) { return c.status === "onboarding"; }).length) +
+        stat("Active clients", data.clients.filter(function (c) { return status(c) === "active"; }).length) +
+        stat("Onboarding", data.clients.filter(function (c) { return status(c) === "onboarding"; }).length) +
+        stat("Paused", data.clients.filter(function (c) { return status(c) === "paused"; }).length) +
         stat("Monthly recurring", money(mrr)) +
         stat("Pay-per-lead clients", ppl) +
         stat("Via partners", viaPartner) +
@@ -140,8 +160,8 @@
   function drawTable() {
     var qv = filter.q.toLowerCase();
     var rows = data.clients.filter(function (c) {
-      if (filter.status === "current" && c.status === "churned") { return false; }
-      if (filter.status !== "current" && filter.status !== "all" && c.status !== filter.status) { return false; }
+      if (filter.status === "current" && status(c) === "churned") { return false; }
+      if (filter.status !== "current" && filter.status !== "all" && status(c) !== filter.status) { return false; }
       if (!qv) { return true; }
       var p = partner(c.partner_id);
       return [c.business_name, c.industry, p && p.name].join(" ").toLowerCase().indexOf(qv) !== -1;
@@ -156,13 +176,14 @@
         var p = partner(c.partner_id);
         var list = clientServices(c.id).filter(function (x) { return x.status === "active"; });
         var ppl = perLeadOf(c);
-        var live = adsLiveSince(c.id), st = adsState(c.id);
+        var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id);
         return '<a class="cl-row" href="#client/' + c.id + '">' +
-          '<span class="cl-name"><b>' + esc(c.business_name) + "</b>" + statusBadge(c.status) + (p ? '<span class="badge">' + esc(p.name) + "</span>" : "") + "</span>" +
+          '<span class="cl-name"><b>' + esc(c.business_name) + "</b>" + statusBadge(status(c)) + (p ? '<span class="badge">' + esc(p.name) + "</span>" : "") + "</span>" +
           '<span class="cl-svcs">' + (list.length ? list.map(function (x) { return '<i class="chip-s">' + esc((svc(x.service_id) || {}).name || "Service") + "</i>"; }).join("") : '<span class="muted">—</span>') + "</span>" +
           '<span class="cl-money"><b>' + money(monthlyOf(c)) + "</b>" + (ppl.length ? "<small>+ " + ppl.map(function (x) { return money(x.price) + "/lead"; }).join(", ") + "</small>" : "") + "</span>" +
           '<span class="cl-ads">' + (st ? (st === "live" ? '<span class="badge ok">Live</span>' : '<span class="badge warn">' + esc(EVENT[st] || st) + "</span>") : '<span class="muted">—</span>') +
-          (live ? "<small>since " + esc(dateLong(live)) + "</small>" : "") + "</span>" +
+          (live ? "<small>since " + esc(dateLong(live)) + "</small>" : "") +
+          (nx ? "<small>" + esc(nx.kind === "paused" || nx.kind === "stopped" ? "Pausing " : "Going live ") + esc(dateLong(nx.event_date)) + "</small>" : "") + "</span>" +
           "</a>";
       }).join("");
   }
@@ -230,12 +251,16 @@
     var p = partner(c.partner_id);
     var list = clientServices(c.id);
     var ppl = perLeadOf(c);
-    var live = adsLiveSince(c.id);
+    var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id);
+    if (status(c) !== c.status) {   // a scheduled pause/relaunch date has arrived: store it
+      c.status = status(c);
+      T.sb.from("clients").update({ status: c.status }).eq("id", c.id).then(function () {});
+    }
 
     el.innerHTML = '<div class="cl-wrap">' +
       '<a class="back" href="#clients">← Clients</a>' +
       '<div class="lead-head"><div><h1>' + esc(c.business_name) + "</h1>" +
-      '<div class="sub">' + statusBadge(c.status) + (p ? ' <a class="badge" href="#partner/' + p.id + '">via ' + esc(p.name) + "</a>" : "") +
+      '<div class="sub">' + statusBadge(status(c)) + (p ? ' <a class="badge" href="#partner/' + p.id + '">via ' + esc(p.name) + "</a>" : "") +
       (c.industry ? " · " + esc(c.industry) : "") + (c.website ? " · " + T.linkify(c.website) : "") + "</div></div>" +
       '<div class="lead-actions"><button class="btn" id="cEdit">Edit details</button><button class="btn ghost" id="cMore">More</button></div></div>' +
 
@@ -243,7 +268,12 @@
         '<div class="fld"><label for="cStatus">Status</label>' + sel("cStatus", STATUS.map(function (s) { return [s.id, s.label]; }), c.status) + "</div>" +
         '<div class="fld"><label>Monthly recurring</label><div class="metaval">' + money(monthlyOf(c)) + (ppl.length ? " <small>+ " + ppl.map(function (x) { return money(x.price) + "/lead"; }).join(", ") + "</small>" : "") + "</div></div>" +
         '<div class="fld"><label>Client since</label><div class="metaval">' + esc(dateLong(c.start_date)) + "</div></div>" +
-        '<div class="fld"><label>Ads live since</label><div class="metaval">' + esc(dateLong(live)) + "</div></div>" +
+        '<div class="fld"><label>Ads</label><div class="ads-switch">' +
+          '<button class="switch' + (st === "live" ? " on" : "") + '" id="adsToggle" role="switch" aria-checked="' + (st === "live") + '" aria-label="Ads live"><i></i></button>' +
+          "<span><b>" + (st === "live" ? "Live" : st ? "Paused" : "Not live yet") + "</b><small>" +
+          (st === "live" ? "since " + esc(dateLong(live)) : st ? "since " + esc(dateLong((adEvents(c.id)[0] || {}).event_date)) : "") +
+          (nx ? (st ? " · " : "") + (nx.kind === "paused" || nx.kind === "stopped" ? "pausing " : "going live ") + esc(dateLong(nx.event_date)) : "") +
+          "</small></span></div></div>" +
       "</div>" +
 
       '<div class="layout"><div>' +
@@ -276,10 +306,10 @@
 
   function adsPanel(c) {
     var ev = data.events.filter(function (e) { return e.client_id === c.id; });
-    return '<div class="panel"><h2>Ads <span class="hbtns"><button class="btn sm" id="editAds">Edit ad setup</button><button class="btn sm gold" id="addEvent">+ Log launch / pause</button></span></h2>' +
+    return '<div class="panel"><h2>Ads <span class="hbtns"><button class="btn sm" id="editAds">Edit ad setup</button><button class="btn sm" id="addEvent">+ Add past date or note</button></span></h2>' +
       '<dl class="ans"><dt>Meta ad account(s)</dt><dd>' + (c.meta_ad_account_ids && c.meta_ad_account_ids.length ? c.meta_ad_account_ids.map(esc).join(", ") : '<span class="muted">Not set. Needed to match Meta billing reports.</span>') + "</dd><span></span></dl>" +
       '<dl class="ans"><dt>Ad spend</dt><dd>' + esc(SPEND[c.ad_spend_mode] || "—") +
-        (c.ad_spend_mode === "sgs_prepaid" && (c.prepay_cadence || c.prepay_amount) ? "<br><small class='muted'>Prepays " + esc(money(c.prepay_amount)) + " " + esc((CADENCE[c.prepay_cadence] || "").toLowerCase()) + "</small>" : "") +
+        ((c.ad_spend_mode === "sgs_prepaid" || c.ad_spend_mode === "sgs_partner") && (c.prepay_cadence || c.prepay_amount) ? "<br><small class='muted'>" + (c.ad_spend_mode === "sgs_partner" ? "Partner prepays " : "Client prepays ") + esc(money(c.prepay_amount)) + " " + esc((CADENCE[c.prepay_cadence] || "").toLowerCase()) + "</small>" : "") +
       "</dd><span></span></dl>" +
       '<h3 class="sub-h">Timeline</h3>' +
       (ev.length ? '<ul class="timeline">' + ev.map(function (e) {
@@ -296,7 +326,7 @@
       row("Billed", p ? "Through " + esc(p.name) + " (partner)" : "Directly") +
       row("Pays by", esc(PAY[c.payment_method] || c.payment_method)) +
       row("Address", esc(c.address)) +
-      row("Stripe customer", esc(c.stripe_customer_id)) +
+      row("Stripe customer" + ((c.stripe_customer_ids || []).length > 1 ? "s" : ""), (c.stripe_customer_ids || []).map(function (id) { return '<a href="https://dashboard.stripe.com/customers/' + esc(id) + '" target="_blank" rel="noopener">' + esc(id) + "</a>"; }).join("<br>")) +
       row("GHL contact", esc(c.ghl_contact_id)) +
       (c.lead_id ? row("Website lead", '<a href="#lead/' + c.lead_id + '">Open intake</a>') : "") +
       row("Notes", c.notes ? '<span style="white-space:pre-wrap">' + esc(c.notes) + "</span>" : "") +
@@ -335,6 +365,7 @@
     $("addSvc").onclick = function () { editService(c, null); };
     el.querySelectorAll("[data-cs]").forEach(function (b) { b.onclick = function () { editService(c, byId(data.cs, b.dataset.cs)); }; });
     $("editAds").onclick = function () { editAds(c); };
+    $("adsToggle").onclick = function () { toggleAds(c); };
     $("addEvent").onclick = function () { addEvent(c); };
     el.querySelectorAll("[data-delev]").forEach(function (b) {
       b.onclick = async function () {
@@ -355,7 +386,7 @@
       fld("ecStart", "Client since", inp("ecStart", c.start_date || "", ' type="date"')) +
       fld("ecPartner", "Partner", '<select class="inp" id="ecPartner">' + partnerOptions(c.partner_id) + "</select>") +
       fld("ecPay", "Pays by", sel("ecPay", Object.keys(PAY).map(function (k) { return [k, PAY[k]]; }), c.payment_method)) +
-      fld("ecStripe", "Stripe customer ID", inp("ecStripe", c.stripe_customer_id, ' placeholder="cus_..."')) +
+      fld("ecStripe", "Stripe customer ID(s)", inp("ecStripe", (c.stripe_customer_ids || []).join(", "), ' placeholder="cus_... (separate several with commas)"')) +
       fld("ecGhl", "GHL contact ID", inp("ecGhl", c.ghl_contact_id)) +
       fld("ecNotes", "Notes", '<textarea class="inp" id="ecNotes" rows="4">' + esc(c.notes) + "</textarea>", true) +
       "</div><div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Save</button></div>");
@@ -367,7 +398,7 @@
         await q(T.sb.from("clients").update({
           business_name: name, industry: $("ecIndustry").value.trim(), website: $("ecWebsite").value.trim(),
           address: $("ecAddress").value.trim(), start_date: $("ecStart").value || null, partner_id: $("ecPartner").value || null,
-          payment_method: $("ecPay").value, stripe_customer_id: $("ecStripe").value.trim(), ghl_contact_id: $("ecGhl").value.trim(),
+          payment_method: $("ecPay").value, stripe_customer_ids: $("ecStripe").value.split(/[,\s]+/).map(function (x) { return x.trim(); }).filter(Boolean), ghl_contact_id: $("ecGhl").value.trim(),
           notes: $("ecNotes").value
         }).eq("id", c.id));
         T.closeModal(); T.toast("Saved"); refresh();
@@ -453,7 +484,7 @@
       '<div class="fld" id="eaCadW">' + '<label for="eaCad">Client prepays</label>' + sel("eaCad", Object.keys(CADENCE).map(function (k) { return [k, CADENCE[k]]; }), c.prepay_cadence) + "</div>" +
       '<div class="fld" id="eaAmtW"><label for="eaAmt">Prepay amount</label><div class="money-in"><span>$</span><input class="inp" id="eaAmt" inputmode="decimal" value="' + esc(c.prepay_amount == null ? "" : c.prepay_amount) + '"></div></div>' +
       "</div><div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Save</button></div>");
-    function sync() { var on = $("eaMode").value === "sgs_prepaid"; $("eaCadW").classList.toggle("hidden", !on); $("eaAmtW").classList.toggle("hidden", !on); }
+    function sync() { var on = $("eaMode").value === "sgs_prepaid" || $("eaMode").value === "sgs_partner"; $("eaCadW").classList.toggle("hidden", !on); $("eaAmtW").classList.toggle("hidden", !on); $("eaCadW").querySelector("label").textContent = $("eaMode").value === "sgs_partner" ? "Partner prepays" : "Client prepays"; }
     $("eaMode").onchange = sync; sync();
     $("mCancel").onclick = T.closeModal;
     $("mSave").onclick = async function () {
@@ -463,10 +494,36 @@
       try {
         await q(T.sb.from("clients").update({
           meta_ad_account_ids: ids, ad_spend_mode: mode,
-          prepay_cadence: mode === "sgs_prepaid" ? $("eaCad").value : "",
-          prepay_amount: mode === "sgs_prepaid" && !isNaN(amt) ? amt : null
+          prepay_cadence: mode === "sgs_prepaid" || mode === "sgs_partner" ? $("eaCad").value : "",
+          prepay_amount: (mode === "sgs_prepaid" || mode === "sgs_partner") && !isNaN(amt) ? amt : null
         }).eq("id", c.id));
         T.closeModal(); T.toast("Saved"); refresh();
+      } catch (e) { T.fail(e); }
+    };
+  }
+
+  // Flip ads live/paused on a date (today by default; future dates are scheduled).
+  function toggleAds(c) {
+    var goingLive = adsState(c.id) !== "live";
+    var everLaunched = data.events.some(function (e) { return e.client_id === c.id && (e.kind === "launched" || e.kind === "relaunched"); });
+    var kind = goingLive ? (everLaunched ? "relaunched" : "launched") : "paused";
+    T.modal("<h2>" + (goingLive ? "Turn ads on" : "Pause ads") + "</h2><div class='mgrid'>" +
+      fld("tgDate", goingLive ? "Ads go live on" : "Ads pause on", inp("tgDate", today(), ' type="date"')) +
+      fld("tgNote", "Note", inp("tgNote", "", ' placeholder="Optional, e.g. ' + (goingLive ? "new creative, $50/day" : "client asked to pause for the winter") + '"')) +
+      "<p class='muted full' style='font-size:12px'>" + (goingLive
+        ? "Marks " + esc(c.business_name) + " as Active on that date."
+        : "Marks " + esc(c.business_name) + " as Paused on that date. Pick a future date to schedule it.") + "</p>" +
+      "</div><div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>" + (goingLive ? "Turn on" : "Pause") + "</button></div>");
+    $("mCancel").onclick = T.closeModal;
+    $("mSave").onclick = async function () {
+      var d = $("tgDate").value;
+      if (!d) { T.toast("Pick a date"); return; }
+      try {
+        await q(T.sb.from("ad_events").insert({ client_id: c.id, kind: kind, event_date: d, ad_account_id: (c.meta_ad_account_ids || [])[0] || "", note: $("tgNote").value.trim() }));
+        if (d <= today() && c.status !== "churned") {
+          await q(T.sb.from("clients").update({ status: goingLive ? "active" : "paused" }).eq("id", c.id));
+        }
+        T.closeModal(); T.toast(d <= today() ? (goingLive ? "Ads are live" : "Ads paused") : "Scheduled for " + dateLong(d)); refresh();
       } catch (e) { T.fail(e); }
     };
   }
@@ -474,7 +531,7 @@
   function addEvent(c) {
     var accts = c.meta_ad_account_ids || [];
     T.modal("<h2>Log ad launch or change</h2><div class='mgrid'>" +
-      fld("aeKind", "What happened", sel("aeKind", Object.keys(EVENT).map(function (k) { return [k, EVENT[k]]; }), adsState(c.id) === "live" ? "paused" : "launched")) +
+      fld("aeKind", "What happened", sel("aeKind", Object.keys(EVENT).map(function (k) { return [k, EVENT[k]]; }), "note")) +
       fld("aeDate", "Date", inp("aeDate", today(), ' type="date"')) +
       (accts.length > 1 ? fld("aeAcct", "Ad account", sel("aeAcct", [["", "All / not specific"]].concat(accts.map(function (a) { return [a, a]; })), "")) : "") +
       fld("aeNote", "Note", inp("aeNote", "", ' placeholder="Optional, e.g. new creative, budget $50/day"'), true) +
@@ -487,8 +544,13 @@
           client_id: c.id, kind: $("aeKind").value, event_date: $("aeDate").value,
           ad_account_id: $("aeAcct") ? $("aeAcct").value : (accts[0] || ""), note: $("aeNote").value.trim()
         }));
-        if ($("aeKind").value === "launched" && c.status === "onboarding" && confirm("Mark " + c.business_name + " as Active?")) {
-          await q(T.sb.from("clients").update({ status: "active" }).eq("id", c.id));
+        var k = $("aeKind").value;
+        if (k !== "note" && $("aeDate").value <= today() && c.status !== "churned") {
+          var willBe = (k === "launched" || k === "relaunched") ? "active" : "paused";
+          var latest = adEvents(c.id)[0];
+          if (!latest || latest.event_date <= $("aeDate").value) {
+            await q(T.sb.from("clients").update({ status: willBe }).eq("id", c.id));
+          }
         }
         T.closeModal(); refresh();
       } catch (e) { T.fail(e); }
@@ -544,20 +606,20 @@
     var p = partner(id);
     if (!p) { el.innerHTML = '<div class="cl-wrap"><a class="back" href="#clients">← Clients</a><p class="muted">Partner not found.</p></div>'; return; }
     var theirs = data.clients.filter(function (c) { return c.partner_id === p.id; });
-    var owed = theirs.filter(function (c) { return c.status !== "churned" && c.status !== "paused"; }).reduce(function (s, c) {
+    var owed = theirs.filter(function (c) { return status(c) !== "churned" && status(c) !== "paused"; }).reduce(function (s, c) {
       return s + clientServices(c.id).filter(function (x) { return x.status === "active" && x.billed_to === "partner" && x.billing_type === "monthly"; })
         .reduce(function (t, x) { return t + Number(x.price || 0); }, 0);
     }, 0);
     el.innerHTML = '<div class="cl-wrap"><a class="back" href="#clients">← Clients</a>' +
       '<div class="lead-head"><div><h1>' + esc(p.name) + '</h1><div class="sub">Partner · pays by ' + esc(PAY[p.payment_method] || p.payment_method) + "</div></div>" +
       '<div class="lead-actions"><button class="btn" id="pEdit">Edit partner</button></div></div>' +
-      '<div class="stats">' + stat("Clients", theirs.filter(function (c) { return c.status !== "churned"; }).length) + stat("Expected per month", money(owed)) + stat("Default rate", money(p.default_monthly_rate) + "/client") + "</div>" +
+      '<div class="stats">' + stat("Clients", theirs.filter(function (c) { return status(c) !== "churned"; }).length) + stat("Expected per month", money(owed)) + stat("Default rate", money(p.default_monthly_rate) + "/client") + "</div>" +
       '<div class="panel"><h2>Clients</h2>' +
       (theirs.length ? theirs.map(function (c) {
         var mine = clientServices(c.id).filter(function (x) { return x.status === "active"; });
         var toPartner = mine.filter(function (x) { return x.billed_to === "partner" && x.billing_type === "monthly"; }).reduce(function (s, x) { return s + Number(x.price || 0); }, 0);
         var direct = mine.filter(function (x) { return x.billed_to === "client"; });
-        return '<a class="cl-row p-row" href="#client/' + c.id + '"><span class="cl-name"><b>' + esc(c.business_name) + "</b>" + statusBadge(c.status) + "</span>" +
+        return '<a class="cl-row p-row" href="#client/' + c.id + '"><span class="cl-name"><b>' + esc(c.business_name) + "</b>" + statusBadge(status(c)) + "</span>" +
           '<span class="cl-money"><b>' + money(toPartner) + "/mo</b><small>from " + esc(p.name) + "</small></span>" +
           '<span class="cl-money">' + (direct.length ? "<b>" + direct.length + " upsell" + (direct.length > 1 ? "s" : "") + "</b><small>billed to client</small>" : '<span class="muted">—</span>') + "</span></a>";
       }).join("") : '<p class="muted" style="font-size:14px">No clients linked yet. Pick this partner when creating or editing a client.</p>') +

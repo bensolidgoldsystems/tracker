@@ -251,3 +251,13 @@ a.cl-row:hover{background:var(--card)}
   .p-row{grid-template-columns:minmax(0,1fr) auto}
   .p-row .cl-money:last-child{display:none}
 }
+
+/* ads live switch */
+.ads-switch{display:flex;align-items:center;gap:10px;padding:4px 0}
+.ads-switch span{display:flex;flex-direction:column;line-height:1.2}
+.ads-switch b{font-size:16px}
+.ads-switch small{font-size:12px;color:var(--faint)}
+.switch{position:relative;width:46px;height:26px;border-radius:26px;border:1px solid var(--line);background:var(--raise);flex:none;padding:0;transition:background .15s}
+.switch i{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--muted);transition:all .15s}
+.switch.on{background:rgba(91,208,138,.25);border-color:rgba(91,208,138,.5)}
+.switch.on i{left:23px;background:var(--ok)}
