@@ -497,7 +497,8 @@
     var html = '<a class="back" href="#leads">← Website leads</a>' +
       '<div class="lead-head"><div><h1>' + esc(l.business_name || "Untitled lead") + "</h1>" +
       '<div class="sub">' + [esc(l.contact_name), gmail, tel, "Submitted " + fmtDate(l.created_at)].filter(Boolean).join(" · ") +
-      (l.intake_status === "uploading" ? ' · <span class="badge warn">Upload unfinished</span>' : "") + "</div></div>" +
+      (l.intake_status === "uploading" ? ' · <span class="badge warn">Upload unfinished</span>' : "") +
+      (l.client_id ? ' · <a class="badge gold" href="#client/' + esc(l.client_id) + '">Existing client</a>' : "") + "</div></div>" +
       '<div class="lead-actions">' +
       '<button class="btn gold" id="exportBtn">Export build kit (.zip)</button>' +
       '<button class="btn" id="editBtn">Edit info</button>' +
@@ -752,13 +753,13 @@
     modal('<h2>More</h2>' +
       '<p class="muted" style="font-size:14px;margin-bottom:14px">Lead ID ' + esc(l.id) + (l.ghl_contact_id ? " · GHL contact " + esc(l.ghl_contact_id) : "") + "</p>" +
       '<div style="display:flex;flex-direction:column;gap:10px;align-items:flex-start">' +
-      '<button class="btn gold" id="mmConvert">Convert to client</button>' +
+      (l.client_id ? '<a class="btn gold" href="#client/' + esc(l.client_id) + '" id="mmConvert">Open client</a>' : '<button class="btn gold" id="mmConvert">Convert to client</button>') +
       '<button class="btn" id="mmCopy">Copy intake link pre-filled for this lead</button>' +
       '<button class="btn" id="mmClear">Delete all files (keep the info)</button>' +
       '<button class="btn danger" id="mmDel">Delete this lead completely</button></div>' +
       '<div class="mfoot"><button class="btn" id="mmClose">Close</button></div>');
     $("mmClose").onclick = closeModal;
-    $("mmConvert").onclick = function () { closeModal(); window.SGSClients.convertLead(l); };
+    $("mmConvert").onclick = function (e) { if (l.client_id) { closeModal(); return; } e.preventDefault(); closeModal(); window.SGSClients.convertLead(l); };
     $("mmCopy").onclick = function () {
       var p = new URLSearchParams({ name: l.contact_name || "", email: l.email || "", phone: l.phone || "", business: l.business_name || "" });
       copyText(INTAKE_URL + "?" + p.toString()); closeModal();

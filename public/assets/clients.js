@@ -262,7 +262,7 @@
       '<div class="lead-head"><div><h1>' + esc(c.business_name) + "</h1>" +
       '<div class="sub">' + statusBadge(status(c)) + (p ? ' <a class="badge" href="#partner/' + p.id + '">via ' + esc(p.name) + "</a>" : "") +
       (c.industry ? " · " + esc(c.industry) : "") + (c.website ? " · " + T.linkify(c.website) : "") + "</div></div>" +
-      '<div class="lead-actions"><button class="btn" id="cEdit">Edit details</button><button class="btn ghost" id="cMore">More</button></div></div>' +
+      '<div class="lead-actions"><button class="btn gold" id="cInvite">Website form link</button><button class="btn" id="cEdit">Edit details</button><button class="btn ghost" id="cMore">More</button></div></div>' +
 
       '<div class="metarow">' +
         '<div class="fld"><label for="cStatus">Status</label>' + sel("cStatus", STATUS.map(function (s) { return [s.id, s.label]; }), c.status) + "</div>" +
@@ -362,6 +362,7 @@
       catch (err) { T.fail(err); }
     };
     $("cEdit").onclick = function () { editClient(c); };
+    $("cInvite").onclick = function () { inviteLinks(c); };
     $("cMore").onclick = function () { clientMore(c); };
     $("addSvc").onclick = function () { editService(c, null); };
     el.querySelectorAll("[data-cs]").forEach(function (b) { b.onclick = function () { editService(c, byId(data.cs, b.dataset.cs)); }; });
@@ -601,6 +602,50 @@
     };
   }
 
+  /* ----- private website intake links (skip the short form + booking) ----- */
+  var INTAKE_URL = "https://websites.solidgoldsystems.com/intake/";
+  function newToken() {
+    var b = new Uint8Array(24); crypto.getRandomValues(b);
+    return btoa(String.fromCharCode.apply(null, b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  async function inviteLinks(c) {
+    var list = [];
+    try { list = await q(T.sb.from("intake_invites").select("*").eq("client_id", c.id).order("created_at", { ascending: false }).limit(10)); }
+    catch (e) { T.fail(e); return; }
+    var now = new Date();
+    var open = list.filter(function (i) { return !i.used_at && new Date(i.expires_at) > now; })[0];
+    function stateOf(i) {
+      if (i.used_at) { return '<span class="badge ok">Submitted ' + esc(dateLong(i.used_at.slice(0, 10))) + "</span>" + (i.lead_id ? ' <a href="#lead/' + i.lead_id + '">Open lead</a>' : ""); }
+      if (new Date(i.expires_at) < now) { return '<span class="badge">Expired</span>'; }
+      return '<span class="badge gold">Open until ' + esc(dateLong(i.expires_at.slice(0, 10))) + "</span>";
+    }
+    T.modal("<h2>Website form link</h2>" +
+      "<p class='muted' style='font-size:14px;margin-bottom:12px'>A private link that takes " + esc(c.business_name) + " straight to the detailed website form, skipping the short form and booking. It works once and expires after 14 days. Their info is pre-filled, and the submission lands in Website Leads linked to this client.</p>" +
+      (open ? "<div class='inv-link'><p>Current link:</p><div class='addfiles'><input class='inp' readonly id='ivUrl' value='" + esc(INTAKE_URL + "?invite=" + open.token) + "'><button class='btn' id='ivCopy'>Copy link</button></div>" +
+        "<div class='addfiles' style='margin-top:8px'><a class='btn sm' id='ivText'>Text it</a><a class='btn sm' id='ivMail'>Email it</a></div></div>" : "") +
+      (list.length ? "<h3>Links sent</h3><ul class='hist'>" + list.map(function (i) { return "<li>" + esc(dateLong(i.created_at.slice(0, 10))) + (i.created_by ? " by " + esc(i.created_by) : "") + " · " + stateOf(i) + "</li>"; }).join("") + "</ul>" : "") +
+      "<div class='mfoot'><button class='btn' id='mCancel'>Close</button><button class='btn gold' id='ivNew'>" + (open ? "Make a new link" : "Create link") + "</button></div>");
+    $("mCancel").onclick = T.closeModal;
+    if (open) {
+      var url = INTAKE_URL + "?invite=" + open.token;
+      var first = "";
+      try { var ct = (await q(T.sb.from("client_contacts").select("*").eq("client_id", c.id).order("is_primary", { ascending: false }).limit(1)))[0] || {}; first = (ct.name || "").split(" ")[0]; var ph = ct.phone || "", em = ct.email || ""; } catch (e) { /* optional */ }
+      var msg = "Hi" + (first ? " " + first : "") + "! Here's your private link to send us everything for your new website (logo, photos, services). It takes about 10 minutes: " + url;
+      $("ivCopy").onclick = function () { T.copyText(url); };
+      $("ivText").href = "sms:" + (ph || "") + "?&body=" + encodeURIComponent(msg);
+      $("ivMail").href = "mailto:" + (em || "") + "?subject=" + encodeURIComponent("Your website form") + "&body=" + encodeURIComponent(msg);
+    }
+    $("ivNew").onclick = async function () {
+      try {
+        if (open) { await q(T.sb.from("intake_invites").update({ expires_at: new Date().toISOString() }).eq("id", open.id)); }
+        var me = await T.sb.auth.getUser();
+        await q(T.sb.from("intake_invites").insert({ token: newToken(), client_id: c.id, created_by: (me.data && me.data.user && me.data.user.email) || "" }));
+        T.toast(open ? "New link created; the old one no longer works" : "Link created");
+        inviteLinks(c);
+      } catch (e) { T.fail(e); }
+    };
+  }
+
   function clientMore(c) {
     T.modal("<h2>More</h2><p class='muted' style='font-size:14px;margin-bottom:14px'>Client ID " + esc(c.id) + "</p>" +
       "<div style='display:flex;flex-direction:column;gap:10px;align-items:flex-start'>" +
@@ -743,6 +788,7 @@
 
   /* ================= WEBSITE LEAD -> CLIENT ================= */
   async function convertLead(lead) {
+    if (lead.client_id) { T.toast("This lead already belongs to a client"); location.hash = "client/" + lead.client_id; return; }
     try {
       var existing = await q(T.sb.from("clients").select("id").eq("lead_id", lead.id).limit(1));
       if (existing.length) { T.toast("Already a client. Opening it."); location.hash = "client/" + existing[0].id; return; }
