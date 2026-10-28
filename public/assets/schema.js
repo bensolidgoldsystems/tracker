@@ -26,6 +26,7 @@
         { id: "contact_email", label: "Your email", type: "email", req: true, half: true, auto: "email", hint: "So we can reach you about the build." },
         { id: "business_phone", label: "Business phone (shown on site)", type: "tel", req: true, half: true, auto: "tel" },
         { id: "business_email", label: "Business email (shown on site)", type: "email", half: true },
+        { id: "current_website", label: "Current website", labelNote: "if you have one", type: "url", ph: "yourbusiness.com", auto: "url" },
         { id: "business_address", label: "Business address", type: "text", ph: "Street, city, state, ZIP", auto: "street-address" },
         { id: "show_address", label: "Show your address on the site?", type: "choice", options: ["Yes, show it", "No, service area only"] },
         { id: "business_hours", label: "Business hours", type: "text", half: true, ph: "Mon–Fri 8am–6pm, Sat 9am–2pm" },
@@ -158,7 +159,7 @@
     ]},
     { id: "access", title: "Access / Accounts", items: [
       { id: "dns", label: "Domain registrar login or DNS access" },
-      { id: "existing_site", label: "Existing site login", note: "to pull content, set redirects" },
+      { id: "existing_site", label: "Existing site login", note: "to pull content, set redirects", from: function (a) { return has(a, "current_website") || has(a, "lp_website_url"); } },
       { id: "tracking", label: "Meta Pixel ID, GA4, Google Search Console" }
     ]},
     { id: "content", title: "Website Content", items: [

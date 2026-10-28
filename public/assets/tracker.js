@@ -217,7 +217,7 @@
       '<div class="fld"><label for="mDraft">Draft site URL</label><input class="inp" type="url" id="mDraft" placeholder="https://...netlify.app" value="' + esc(l.draft_url || "") + '"></div>' +
       "</div>" +
 
-      '<div class="layout"><div>' + filesPanel() + answersPanels(a) + "</div>" +
+      '<div class="layout"><div>' + bannerPanel() + filesPanel() + answersPanels(a) + "</div>" +
       '<aside class="side">' + checklistPanel(cs) +
       '<div class="panel"><h2>Internal notes</h2><textarea class="inp notes" id="mNotes" placeholder="Call notes, what they liked, changes to make...">' + esc(l.internal_notes || "") + "</textarea></div>" +
       "</aside></div>";
@@ -242,7 +242,7 @@
 
   function filesPanel() {
     var byKind = {};
-    current.files.forEach(function (f) { (byKind[f.kind] = byKind[f.kind] || []).push(f); });
+    current.files.forEach(function (f) { if (f.kind !== "banner") { (byKind[f.kind] = byKind[f.kind] || []).push(f); } });
     var total = current.files.reduce(function (s, f) { return s + Number(f.size || 0); }, 0);
     var body = S.FILE_KINDS.filter(function (k) { return byKind[k.id]; }).map(function (k) {
       return '<div class="kind"><h3>' + esc(k.label) + ' <span class="badge">' + byKind[k.id].length + "</span>" +
@@ -260,8 +260,65 @@
       (link ? '<p style="font-size:14px;margin-bottom:8px">Photo link: ' + linkify(link) + "</p>" : "") +
       (body || '<p class="muted" style="font-size:14px">No files yet.</p>') +
       '<div class="kind"><h3>Add files</h3><div class="addfiles"><select class="inp" id="addKind">' +
-      S.FILE_KINDS.map(function (k) { return '<option value="' + k.id + '"' + (k.id === "banner" ? " selected" : "") + ">" + esc(k.label) + "</option>"; }).join("") +
+      S.FILE_KINDS.filter(function (k) { return k.id !== "banner"; }).map(function (k) { return '<option value="' + k.id + '"' + (k.id === "headshots" ? " selected" : "") + ">" + esc(k.label) + "</option>"; }).join("") +
       '</select><label class="btn" for="addInput">Choose files</label><input class="sr-only" type="file" id="addInput" multiple></div></div></div>';
+  }
+
+  /* ---------- text preview banner (og:image) ---------- */
+  function bannerFile() { return current.files.filter(function (f) { return f.kind === "banner"; })[0] || null; }
+  function bannerExportName(f) { var ext = (f.name.match(/\.[a-z0-9]+$/i) || [".png"])[0].toLowerCase(); return "og-image" + ext; }
+
+  function bannerPanel() {
+    var b = bannerFile(), url = b && current.urls[b.path];
+    return '<div class="panel banner-panel"><h2>Text preview banner' +
+      (b ? '<span class="badge gold">In export as ' + esc(bannerExportName(b)) + "</span>" : '<span class="badge warn">Not added</span>') + "</h2>" +
+      '<div class="banner-row">' +
+      (b
+        ? '<button class="banner-img" data-path="' + esc(b.path) + '" aria-label="Open banner">' + (url ? '<img alt="Text preview banner" src="' + esc(url) + '">' : "") + "</button>"
+        : '<label class="banner-img empty" for="bannerInput"><strong>Upload banner</strong><span>1200 × 630 PNG or JPG</span></label>') +
+      '<div class="banner-side"><p class="muted">The image people see when the site link is shared in a text, iMessage, Facebook or Slack. It exports as <code>' + (b ? esc(bannerExportName(b)) : "og-image.png") + "</code> at the top of the zip.</p>" +
+      '<div class="addfiles"><label class="btn' + (b ? "" : " gold") + '" for="bannerInput">' + (b ? "Replace" : "Upload banner") + "</label>" +
+      (b ? '<button class="btn ghost danger" id="bannerRemove">Remove</button>' : "") +
+      '<input class="sr-only" type="file" id="bannerInput" accept="image/png,image/jpeg,image/webp"></div>' +
+      (b ? '<p class="muted" style="font-size:12px;margin-top:8px">' + esc(b.name) + " · " + fmtSize(b.size) + '<span id="bannerDims"></span></p>' : "") +
+      "</div></div></div>";
+  }
+
+  function wireBanner() {
+    var b = bannerFile();
+    $("bannerInput").addEventListener("change", function (e) { var f = e.target.files[0]; e.target.value = ""; if (f) { uploadBanner(f); } });
+    if (b) {
+      $("bannerRemove").addEventListener("click", function () { deleteFiles([b]); });
+      var btn = document.querySelector(".banner-img[data-path]");
+      if (btn) { btn.addEventListener("click", function () { openViewer(b.path); }); }
+      var img = document.querySelector(".banner-img img");
+      if (img) {
+        img.addEventListener("load", function () {
+          var ok = img.naturalWidth === 1200 && img.naturalHeight === 630;
+          $("bannerDims").textContent = " · " + img.naturalWidth + " × " + img.naturalHeight + (ok ? "" : " (1200 × 630 recommended)");
+        });
+      }
+    }
+  }
+
+  async function uploadBanner(file) {
+    var id = current.lead.id, old = current.files.filter(function (f) { return f.kind === "banner"; });
+    toast("Uploading banner...", 60000);
+    var path = id + "/banner/" + Date.now().toString(36) + "-" + safeName(file.name);
+    var r = await bucket.upload(path, file, { contentType: file.type || "image/png", upsert: false });
+    if (r.error) { fail(r.error); return; }
+    var ins = await sb.from("lead_files").insert({ lead_id: id, kind: "banner", path: path, name: file.name, size: file.size, mime: file.type || "", source: "sgs" });
+    if (ins.error) { fail(ins.error); return; }
+    if (old.length) {   // one banner per lead: the new one replaces the old
+      await bucket.remove(old.map(function (f) { return f.path; }));
+      await sb.from("lead_files").delete().in("id", old.map(function (f) { return f.id; }));
+    }
+    var cl = Object.assign({}, current.lead.checklist || {});
+    cl.banner = "done";
+    await saveLead({ checklist: cl }, true);
+    toast("Banner saved");
+    await loadLeads();
+    openLead(id);
   }
 
   function checklistPanel(cs) {
@@ -273,7 +330,7 @@
           sec.items.map(function (it) {
             var st = cs.cl[it.id] || "", from = it.from && it.from(cs.a, cs.files);
             return '<div class="cl-item' + (st === "na" ? " na" : "") + '"><input type="checkbox" id="cl_' + it.id + '" data-cl="' + it.id + '"' + (st === "done" ? " checked" : "") + (st === "na" ? " disabled" : "") + ">" +
-              '<label for="cl_' + it.id + '">' + esc(it.label) + (from ? '<span class="from">from intake</span>' : "") + (it.note ? "<small>" + esc(it.note) + "</small>" : "") + "</label>" +
+              '<label for="cl_' + it.id + '">' + esc(it.label) + (from ? '<span class="from">provided</span>' : "") + (it.note ? "<small>" + esc(it.note) + "</small>" : "") + "</label>" +
               '<button class="na-btn" data-na="' + it.id + '" title="Not needed for this site">N/A</button></div>';
           }).join("") + "</div>";
       }).join("") + "</div>";
@@ -305,6 +362,7 @@
       t.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     });
     $("addInput").addEventListener("change", function (e) { uploadFiles($("addKind").value, e.target.files); e.target.value = ""; });
+    wireBanner();
   }
 
   async function setChecklist(id, state) {
@@ -479,6 +537,8 @@
     if (l.start_date) { out.push("- **Start date:** " + l.start_date); }
     if (l.launch_date) { out.push("- **Launch date:** " + l.launch_date); }
     if (l.draft_url) { out.push("- **Draft site:** " + l.draft_url); }
+    var bn = files.filter(function (x) { return x.kind === "banner"; })[0];
+    out.push("- **Text preview banner:** " + (bn ? "`" + bannerExportName(bn) + "` (top of this zip; use as og:image / twitter:image)" : "_not added yet_"));
     out.push("- **Exported:** " + new Date().toLocaleString("en-US"), "");
     S.SECTIONS.forEach(function (sec) {
       out.push("## " + sec.num + " " + sec.title, "");
@@ -500,7 +560,7 @@
       out.push("### " + sec.title);
       sec.items.forEach(function (it) {
         var st = cs.cl[it.id], from = it.from && it.from(a, files);
-        out.push("- [" + (st === "done" ? "x" : " ") + "] " + it.label + (st === "na" ? " — N/A" : "") + (from ? " _(from intake)_" : "") + (it.note ? " — " + it.note : ""));
+        out.push("- [" + (st === "done" ? "x" : " ") + "] " + it.label + (st === "na" ? " — N/A" : "") + (from ? " _(provided)_" : "") + (it.note ? " — " + it.note : ""));
       });
       out.push("");
     });
@@ -510,7 +570,7 @@
     if (l.internal_notes) { out.push("## Internal notes", "", l.internal_notes, ""); }
     out.push("## Files", "");
     if (!files.length) { out.push("_No files._"); }
-    files.forEach(function (f) { out.push("- `" + folderFor(f.kind) + "/" + f.name + "` (" + fmtSize(f.size) + (f.source === "sgs" ? ", added by SGS" : "") + ")"); });
+    files.forEach(function (f) { out.push("- `" + (f.kind === "banner" ? bannerExportName(f) : folderFor(f.kind) + "/" + f.name) + "` (" + fmtSize(f.size) + (f.source === "sgs" ? ", added by SGS" : "") + ")"); });
     return out.join("\n") + "\n";
   }
 
@@ -533,6 +593,7 @@
         btn.textContent = "Downloading " + (i + 1) + "/" + files.length + "...";
         var res = await fetch(current.urls[f.path]);
         if (!res.ok) { throw new Error("Couldn't download " + f.name); }
+        if (f.kind === "banner") { root.file(bannerExportName(f), await res.blob(), { binary: true }); continue; }
         var name = f.name, key = folderFor(f.kind) + "/" + name, n = 1;
         while (used[key]) { name = f.name.replace(/(\.[^.]*)?$/, "-" + (++n) + "$1"); key = folderFor(f.kind) + "/" + name; }
         used[key] = true;

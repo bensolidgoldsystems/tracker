@@ -91,6 +91,17 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 50
 .addfiles{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
 .addfiles select{max-width:240px;padding:8px 30px 8px 10px}
 textarea.notes{min-height:140px}
+.banner-panel h2 .badge{font-family:var(--body);letter-spacing:.04em}
+.banner-row{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:16px;align-items:start}
+.banner-img{display:block;width:100%;aspect-ratio:1200/630;border-radius:8px;overflow:hidden;background:var(--raise);border:1px solid var(--line);padding:0;cursor:zoom-in}
+.banner-img img{width:100%;height:100%;object-fit:cover}
+.banner-img.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;border:1px dashed rgba(255,255,255,.22);cursor:pointer;text-align:center}
+.banner-img.empty:hover{border-color:var(--gold)}
+.banner-img.empty strong{font-size:14px}
+.banner-img.empty span{font-size:12px;color:var(--faint)}
+.banner-side p{font-size:13px;margin-bottom:10px}
+.banner-side code{color:var(--gold)}
+@media (max-width:700px){.banner-row{grid-template-columns:1fr}}
 
 /* modal + viewer + toast */
 .modal{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.8);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto}
