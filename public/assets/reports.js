@@ -14,7 +14,7 @@
   var M3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var CAT = {
     revenue: "Revenue", per_lead: "Pay per lead", ad_spend: "Ad spend (our cards)",
-    ad_reimbursement: "Ad spend reimbursed", partner_payout: "Partner payout"
+    ad_reimbursement: "Ad spend prepaid", partner_payout: "Partner payout"
   };
   var SOURCE = { manual: "Added in Tracker", sheet: "Bookkeeping sheet", meta_csv: "Meta billing report", meta_api: "Meta (synced)", stripe: "Stripe" };
   var STATUS_LABEL = { onboarding: "Onboarding", active: "Active", paused: "Paused", churned: "Churned" };
@@ -117,7 +117,7 @@
   }
   function perLeadServices(cid) { return d.cs.filter(function (x) { return x.client_id === cid && x.billing_type === "per_lead" && x.status !== "ended"; }); }
   function monthlyServices(cid) { return d.cs.filter(function (x) { return x.client_id === cid && x.billing_type === "monthly" && x.status === "active"; }); }
-  // Running ad balance (reimbursed minus spent) through the end of a month. Negative = they owe us.
+  // Running ad balance (prepaid minus spent) through the end of a month. Negative = they owe us.
   function adBalance(cid, throughKey) {
     var months = d.cell[cid] || {}, b = 0;
     Object.keys(months).forEach(function (k) {
@@ -182,14 +182,14 @@
       '<div class="cl-actions"><a class="btn" href="#reports">Open reports</a></div></div>' +
       '<div class="stats">' +
         kpi("Revenue this month", money(t.income), compare(t.income, tp.income)) +
-        kpi("Ad spend on our cards", money(t.spend), "Reimbursed " + money(t.reimb)) +
+        kpi("Ad spend on our cards", money(t.spend), "Prepaid by clients " + money(t.reimb)) +
         kpi("Partner payouts", money(t.payout), "") +
         (function () {
           var sum = 0, n = 0;
           d.clients.forEach(function (c) { if (weFront(c)) { var u = unbilled(c); if (u) { sum += u.amount; n++; } } });
           return n ? kpi("At Meta, not yet charged", money(sum, { cents: true }), "Will hit our cards next") : "";
         })() +
-        kpi("Net this month", money(t.net), "Revenue + reimbursed − spend − payouts", t.net < 0 ? "bad" : "") +
+        kpi("Net this month", money(t.net), "Revenue + prepaid − spend − payouts", t.net < 0 ? "bad" : "") +
         kpi("Revenue " + y + " to date", money(ytd), "") +
         kpi("Monthly recurring", money(mrr), current.length + " current clients") +
       "</div>" +
@@ -213,7 +213,7 @@
   function attention(key, leadsNew) {
     var items = [];
     var dayOfMonth = new Date().getDate();
-    // Ad spend we fronted that hasn't been reimbursed.
+    // Ad spend we fronted that hasn't been covered by a prepayment.
     d.clients.forEach(function (c) {
       if (c.ad_spend_mode === "sgs_included") { return; }   // our cost, nothing to collect
       if (!weFront(c) && !hasAny(c.id, ["ad_spend", "synced_spend"], key.slice(0, 4))) { return; }
@@ -341,7 +341,7 @@
     var summary = head("Month") + "<tbody>" +
       sumLine("Revenue (retainers + one-time)", function (t) { return t.revenue; }) +
       sumLine("Pay per lead", function (t) { return t.per_lead; }) +
-      sumLine("Ad spend reimbursed", function (t) { return t.reimb; }) +
+      sumLine("Ad spend prepaid", function (t) { return t.reimb; }) +
       sumLine("Ad spend on our cards", function (t) { return -t.spend; }, "neg") +
       sumLine("Partner payouts", function (t) { return -t.payout; }, "neg") +
       "</tbody><tfoot>" + sumLine("Net", function (t) { return t.net; }) + "</tfoot>";
@@ -356,7 +356,7 @@
       return "<tbody class='grp'>" +
         "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + (unbilled(c) ? " · <b class='unb'>At Meta: " + esc(unbilledText(unbilled(c))) + "</b>" : "") + "</td></tr>" +
         (c.ad_spend_mode === "sgs_included" ? row(c, "spend", { label: "Spent (our cost)" }) :
-          row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Reimbursed" }) + bal) + "</tbody>";
+          row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Prepaid" }) + bal) + "</tbody>";
     }).join("");
 
     var partnerName = (d.partners[0] || {}).name || "partner";
@@ -369,9 +369,9 @@
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
       section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
         head("Client") + "<tbody>" + pplRows.map(function (c) { return row(c, "per_lead"); }).join("") + "</tbody>" + totalRow("Total pay per lead", sumCat(pplRows, "per_lead")), "per_lead") +
-      section("secAds", "Ad spend and reimbursement", "Spent = actual Meta charges on our cards (5978, 0719), from billing reports and synced from Meta every morning. Balance below zero means they owe us.",
+      section("secAds", "Ad spend and prepayments", "Spent = actual Meta charges on our cards (5978, 0719), from billing reports and synced from Meta every hour. Prepaid = what the client paid us up front for ad spend. Balance = prepaid minus spent so far; below zero means they owe us.",
         head("Client") + adBody + totalRow("Total spent", sumCat(adRows, "spend"), true).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
-        totalRow("Total reimbursed", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
+        totalRow("Total prepaid", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
       section("secPay", "Pay " + partnerName, "What we paid out, by client.",
         head("Client") + "<tbody>" + payRows.map(function (c) { return row(c, "partner_payout"); }).join("") + "</tbody>" + totalRow("Total paid out", sumCat(payRows, "partner_payout")), "partner_payout") +
       "</div>";
@@ -396,7 +396,7 @@
   }
   function modeLabel(c) {
     return {
-      sgs_prepaid: "We pay Meta, client prepays us", sgs_partner: "We pay Meta, partner reimburses monthly",
+      sgs_prepaid: "We pay Meta, client prepays us", sgs_partner: "We pay Meta, client prepays monthly",
       sgs_included: "We pay Meta, built into their price", client_pays: "Client pays Meta directly", none: "Ad spend setup not set"
     }[c.ad_spend_mode || "none"] || "";
   }
@@ -504,7 +504,7 @@
       ["Revenue " + y, money(tot.revenue + tot.per_lead)],
       tot.leads ? ["Leads from Meta " + y, String(tot.leads)] : null,
       tot.spend || weFront(c) ? ["Ad spend on our cards", money(tot.spend, { cents: true })] : null,
-      tot.reimb || weFront(c) ? ["Ad spend reimbursed", money(tot.reimb, { cents: true })] : null,
+      tot.reimb || weFront(c) ? ["Ad spend prepaid", money(tot.reimb, { cents: true })] : null,
       (tot.spend || tot.reimb) && c.ad_spend_mode !== "sgs_included" ? ["Ad balance", '<b class="' + (bal < 0 ? "neg" : "pos") + '">' + money(bal, { cents: true }) + "</b>" + (bal < 0 ? " owed to us" : "")] : null,
       unbilled(c) ? ["Waiting to charge at Meta", unbilledText(unbilled(c))] : null,
       tot.payout ? ["Paid to partner", money(tot.payout)] : null

@@ -20,7 +20,7 @@
     none: "No ads / not tracked",
     client_pays: "Client pays Meta directly",
     sgs_prepaid: "SGS pays Meta, client prepays SGS",
-    sgs_partner: "SGS pays Meta, partner reimburses monthly",
+    sgs_partner: "SGS pays Meta, client prepays monthly",
     sgs_included: "SGS pays Meta, built into their price"
   };
   var CADENCE = { "": "—", weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
