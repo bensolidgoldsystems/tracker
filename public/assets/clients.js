@@ -167,6 +167,12 @@
       var p = partner(c.partner_id);
       return [c.business_name, c.industry, p && p.name].join(" ").toLowerCase().indexOf(qv) !== -1;
     });
+    // Active first, then onboarding, paused, churned; A to Z within each.
+    var ORDER = { active: 0, onboarding: 1, paused: 2, churned: 3 };
+    rows.sort(function (a, b) {
+      return (ORDER[status(a)] == null ? 9 : ORDER[status(a)]) - (ORDER[status(b)] == null ? 9 : ORDER[status(b)]) ||
+        a.business_name.localeCompare(b.business_name, "en", { sensitivity: "base" });
+    });
     var box = $("clTable");
     if (!rows.length) {
       box.innerHTML = '<div class="empty-state">' + (data.clients.length ? "No clients match." : 'No clients yet. Click <b>+ New client</b>, or open a closed website lead and choose <b>More → Convert to client</b>.') + "</div>";
