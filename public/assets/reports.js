@@ -14,7 +14,8 @@
   var M3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var CAT = {
     revenue: "Revenue", per_lead: "Pay per lead", ad_spend: "Ad spend (our cards)",
-    ad_reimbursement: "Ad spend prepaid", partner_payout: "Partner payout"
+    ad_reimbursement: "Ad spend prepaid", partner_payout: "Paid to partner",
+    video_shoot: "Video shoot collected", card_fee: "Card fee covered"
   };
   var SOURCE = { manual: "Added in Tracker", sheet: "Bookkeeping sheet", meta_csv: "Meta billing report", meta_api: "Meta (synced)", stripe: "Stripe" };
   var STATUS_LABEL = { onboarding: "Onboarding", active: "Active", paused: "Paused", churned: "Churned" };
@@ -75,9 +76,10 @@
       all(function () { return T.sb.from("money_entries").select("*").order("entry_date", { ascending: true, nullsFirst: true }).order("id"); }),
       all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_ad_accounts").select("*").order("name")),
-      q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5))
+      q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5)),
+      q(T.sb.from("stripe_sync_runs").select("*").not("finished_at", "is", null).order("started_at", { ascending: false }).limit(1)).catch(function () { return []; })
     ]);
-    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8] };
+    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null };
     index();
     return d;
   }
@@ -126,15 +128,16 @@
     return b;
   }
   function monthTotals(key) {
-    var t = { revenue: 0, per_lead: 0, spend: 0, reimb: 0, payout: 0 };
+    var t = { revenue: 0, per_lead: 0, spend: 0, reimb: 0, payout: 0, shoot: 0, fee: 0 };
     Object.keys(d.cell).forEach(function (cid) {
       var m = d.cell[cid][key]; if (!m) { return; }
       t.revenue += m.revenue || 0; t.per_lead += m.per_lead || 0;
       t.spend += (m.ad_spend || 0) + (m.synced_spend || 0);
       t.reimb += m.ad_reimbursement || 0; t.payout += m.partner_payout || 0;
+      t.shoot += m.video_shoot || 0; t.fee += m.card_fee || 0;
     });
     t.income = t.revenue + t.per_lead;
-    t.net = t.income + t.reimb - t.spend - t.payout;
+    t.net = t.income + t.reimb + t.shoot + t.fee - t.spend - t.payout;
     return t;
   }
   // Spend at Meta not yet charged to the card, for a client's linked accounts.
@@ -253,6 +256,11 @@
     }
     if (leadsNew) { items.push({ pri: 2, html: leadsNew + " new website lead" + (leadsNew === 1 ? "" : "s") + ' waiting <a href="#leads">Open</a>' }); }
     var run = d.runs[0];
+    var sr = d.stripeRun;
+    if (sr && sr.ok === false) { items.push({ pri: 1, html: "Last Stripe sync had a problem: " + esc(sr.message || "unknown error") }); }
+    (sr && sr.unmatched || []).forEach(function (u) {
+      items.push({ pri: 2, html: "Stripe payments from <b>" + esc(u.name || "unknown customer") + "</b> (" + money(u.amount, { cents: true }) + ") aren't linked to a client. Add their Stripe customer on the client page." });
+    });
     if (!run) { items.push({ pri: 3, html: 'Meta isn\'t connected yet. Ad spend and leads will update every hour once it is. <a href="#settings">Settings</a>' }); }
     else if (run.ok === false) { items.push({ pri: 1, html: "Last Meta sync had a problem: " + esc(run.message || "unknown error") + ' <a href="#settings">Settings</a>' }); }
     if (!items.length) { return '<li class="ok">All caught up.</li>'; }
@@ -289,7 +297,8 @@
     });
     var pplRows = clients.filter(function (c) { return hasAny(c.id, ["per_lead"], y) || (statusOf(c) !== "churned" && perLeadServices(c.id).length); });
     var adRows = clients.filter(function (c) { return hasAny(c.id, ["ad_spend", "synced_spend", "ad_reimbursement"], y) || (weFront(c) && statusOf(c) !== "churned"); });
-    var payRows = clients.filter(function (c) { return hasAny(c.id, ["partner_payout"], y); });
+    var payRows = clients.filter(function (c) { return hasAny(c.id, ["partner_payout", "video_shoot"], y); });
+    var feeRows = clients.filter(function (c) { return hasAny(c.id, ["card_fee"], y); });
 
     function head(first) {
       return "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
@@ -343,7 +352,9 @@
       sumLine("Pay per lead", function (t) { return t.per_lead; }) +
       sumLine("Ad spend prepaid", function (t) { return t.reimb; }) +
       sumLine("Ad spend on our cards", function (t) { return -t.spend; }, "neg") +
-      sumLine("Partner payouts", function (t) { return -t.payout; }, "neg") +
+      sumLine("Video shoots collected", function (t) { return t.shoot; }) +
+      sumLine("Card fees covered", function (t) { return t.fee; }) +
+      sumLine("Paid to " + ((d.partners[0] || {}).name || "partner"), function (t) { return -t.payout; }, "neg") +
       "</tbody><tfoot>" + sumLine("Net", function (t) { return t.net; }) + "</tfoot>";
 
     // Ad spend: three lines per client.
@@ -372,8 +383,14 @@
       section("secAds", "Ad spend and prepayments", "Spent = actual Meta charges on our cards (5978, 0719), from billing reports and synced from Meta every hour. Prepaid = what the client paid us up front for ad spend. Balance = prepaid minus spent so far; below zero means they owe us.",
         head("Client") + adBody + totalRow("Total spent", sumCat(adRows, "spend"), true).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
         totalRow("Total prepaid", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
-      section("secPay", "Pay " + partnerName, "What we paid out, by client.",
-        head("Client") + "<tbody>" + payRows.map(function (c) { return row(c, "partner_payout"); }).join("") + "</tbody>" + totalRow("Total paid out", sumCat(payRows, "partner_payout")), "partner_payout") +
+      section("secPay", "Pay " + partnerName, "Paid = what we paid " + esc(partnerName) + " (we pay before the shoot). Collected = what the client paid us for the shoot ($600 each, from Stripe). Card fees = the 3% clients pay on top when they use a card for shoots or ad prepays.",
+        head("Client") + payRows.map(function (c) {
+          return "<tbody class='grp'><tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13'></td></tr>" +
+            row(c, "partner_payout", { label: "Paid " + partnerName }) + row(c, "video_shoot", { label: "Collected for shoots" }) + "</tbody>";
+        }).join("") +
+        totalRow("Total paid " + partnerName, sumCat(payRows, "partner_payout")).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
+        totalRow("Total collected for shoots", sumCat(payRows, "video_shoot")).replace("<tfoot>", "").replace("</tfoot>", "") +
+        totalRow("Card fees covered (all clients)", sumCat(feeRows, "card_fee"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "partner_payout") +
       "</div>";
 
     el.querySelectorAll("td.c").forEach(function (td) {
