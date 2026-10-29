@@ -11,7 +11,7 @@
   var SGS = (window.SGS_CONFIG && window.SGS_CONFIG.sgsMeta) || { adAccounts: [], pages: [] };
   var sgsView = { by: "campaign", sort: "spend" };
   // SGS's own leads (not tied to a client) live on the SGS Leads tab, not under "not matched".
-  function isSgs(l) { return !l.client_id && (SGS.pages.indexOf(l.page_id) !== -1 || SGS.adAccounts.indexOf(l.ad_account_id) !== -1); }
+  function isSgs(l) { return l.is_sgs === true || !l.client_id && (SGS.pages.indexOf(l.page_id) !== -1 || SGS.adAccounts.indexOf(l.ad_account_id) !== -1); }
 
   function esc(s) { return T.esc(s); }
   function $(id) { return document.getElementById(id); }
@@ -64,10 +64,43 @@
       all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_pages").select("*")),
       q(T.sb.from("meta_sync_runs").select("started_at,ok,message").order("started_at", { ascending: false }).limit(1)),
+      all(function () { return T.sb.from("ghl_contacts").select("*").or("is_sgs.eq.true,client_id.not.is.null").order("date_added", { ascending: false }).order("id"); }).catch(function () { return []; }),
       withAds ? all(function () { return T.sb.from("meta_ad_daily").select("*").in("ad_account_id", SGS.adAccounts).order("day").order("ad_id"); }).catch(function () { return []; }) : Promise.resolve([])
     ]);
-    d = { clients: res[0], leads: res[1], daily: res[2], pages: res[3], run: res[4][0] || null, ads: res[5] };
+    d = { clients: res[0], leads: mergeGhl(res[1], res[5]), daily: res[2], pages: res[3], run: res[4][0] || null, ads: res[6] };
   }
+
+  /* GHL leads: the same person from a Meta lead form gets their GHL pipeline stage; everyone else
+     (website forms, funnels, leads older than Meta's 90 days) is added as a lead of their own. */
+  function mergeGhl(meta, ghl) {
+    var byFb = {};
+    meta.forEach(function (l) { byFb[l.id] = l; });
+    var out = meta.slice();
+    (ghl || []).forEach(function (g) {
+      var m = g.facebook_lead_id && byFb[g.facebook_lead_id];
+      if (m) { m.stage = g.stage_name; m.pipeline = g.pipeline_name; m.ghl_id = g.id; if (g.is_sgs && !m.client_id) { m.is_sgs = true; } return; }
+      var fields = (g.custom || []).map(function (f) { return { name: f.name || "Answer", values: f.values }; });
+      if (g.company) { fields.unshift({ name: "Business", values: [g.company] }); }
+      if (g.landing_url) { fields.push({ name: "Landing page", values: [g.landing_url] }); }
+      if (g.source || g.session_source) { fields.push({ name: "Source", values: [[g.source, g.session_source].filter(Boolean).join(" · ")] }); }
+      out.push({
+        id: "ghl:" + g.id, ghl_id: g.id, created_time: g.date_added, client_id: g.client_id, is_sgs: g.is_sgs, ad_account_id: g.ad_account_id,
+        page_id: "", form_id: "", form_name: g.form_name || g.source || "Website form", ad_id: g.ad_id, ad_name: g.ad_name, adset_name: "",
+        campaign_name: g.campaign_name, is_organic: false,
+        platform: g.facebook_lead_id ? "fb" : "web", name: g.name, email: g.email, phone: g.phone, fields: fields,
+        stage: g.stage_name, pipeline: g.pipeline_name, fromGhl: true
+      });
+    });
+    return out.sort(function (a, b) { return a.created_time < b.created_time ? 1 : a.created_time > b.created_time ? -1 : 0; });
+  }
+  function stageClass(s) {
+    s = String(s || "").toLowerCase();
+    if (/sold|closed|won|client/.test(s)) { return "won"; }
+    if (/booked|showed|appointment/.test(s)) { return "booked"; }
+    if (/not interested|lost|no show|dead/.test(s)) { return "lost"; }
+    return "open";
+  }
+  function isBooked(l) { var c = stageClass(l.stage); return c === "booked" || c === "won"; }
 
   /* Leads, spend and Meta's own lead count for one client (or unmatched leads) in window w. */
   function statsFor(c, w) {
@@ -127,7 +160,7 @@
   }
   function syncNote() {
     var r = d.run;
-    return '<p class="muted al-sync">Leads come from Meta instant forms and refresh every morning' +
+    return '<p class="muted al-sync">Leads come from Meta lead forms and GHL (website forms and funnels) and refresh every morning' +
       (r ? " (last refresh " + esc(new Date(r.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) + ")" : "") +
       '. <button class="linkbtn" id="alSync">Refresh now</button></p>';
   }
@@ -136,7 +169,11 @@
     if (!b) { return; }
     b.onclick = async function () {
       b.disabled = true; b.textContent = "Refreshing...";
-      try { var r = await T.fn("meta-sync", {}); T.toast(r.ok ? (r.message || "Up to date") : (r.message || "Refresh had a problem"), 7000); }
+      try {
+        var res = await Promise.all([T.fn("meta-sync", {}), T.fn("ghl-sync", {}).catch(function (e) { return { ok: false, message: "GHL: " + e.message }; })]);
+        var bad = res.filter(function (r) { return !r.ok; });
+        T.toast(bad.length ? bad.map(function (r) { return r.message || "Refresh had a problem"; }).join(" · ") : "Up to date. " + (res[0].message || ""), 7000);
+      }
       catch (e) { T.fail(e); }
       route(again, el);
     };
@@ -231,7 +268,7 @@
     return '<div class="al-lead">' +
       '<button type="button" class="al-sum" aria-expanded="false">' +
         '<span class="al-when">' + esc(when(l.created_time)) + "</span>" +
-        '<span class="al-who"><b>' + esc(l.name || "No name") + "</b><small>" + esc([phone(l.phone), l.email].filter(Boolean).join(" · ")) + "</small></span>" +
+        '<span class="al-who"><b>' + esc(l.name || "No name") + (l.stage ? ' <em class="al-stage st-' + stageClass(l.stage) + '">' + esc(l.stage) + "</em>" : "") + "</b><small>" + esc([phone(l.phone), l.email].filter(Boolean).join(" · ")) + "</small></span>" +
         '<span class="al-src">' + esc(l.campaign_name || (l.is_organic ? "Organic" : l.form_name || "")) + "<small>" + esc(l.ad_name || l.form_name || "") + "</small></span>" +
         '<span class="al-chev" aria-hidden="true">▾</span></button>' +
       '<div class="al-detail">' +
@@ -241,11 +278,12 @@
             d.clients.map(function (c) { return '<option value="' + c.id + '">' + esc(c.business_name) + "</option>"; }).join("") + "</select>" : "") + "</div>" +
         '<dl class="kv al-fields">' + fields +
           "<dt>Form</dt><dd>" + esc(l.form_name || l.form_id) + "</dd>" +
+          (l.pipeline ? "<dt>GHL pipeline</dt><dd>" + esc(l.pipeline + (l.stage ? " · " + l.stage : "")) + "</dd>" : "") +
           (l.adset_name ? "<dt>Ad set</dt><dd>" + esc(l.adset_name) + "</dd>" : "") +
           (l.platform ? "<dt>Platform</dt><dd>" + esc(platformName(l.platform)) + "</dd>" : "") +
-          "<dt>Meta lead ID</dt><dd>" + esc(l.id) + "</dd></dl></div></div>";
+          (l.fromGhl ? "" : "<dt>Meta lead ID</dt><dd>" + esc(l.id) + "</dd>") + "</dl></div></div>";
   }
-  function platformName(p) { return p === "ig" ? "Instagram" : p === "fb" ? "Facebook" : p || ""; }
+  function platformName(p) { return p === "ig" ? "Instagram" : p === "fb" ? "Facebook" : p === "web" ? "Website" : p || ""; }
 
   function downloadCsv(c, list) {
     var names = [];
@@ -512,7 +550,7 @@
     var keyOf = { campaign: function (x) { return x.campaign_name || "(no campaign)"; }, adset: function (x) { return x.adset_name || "(no ad set)"; }, ad: function (x) { return x.ad_name || "(no ad)"; } };
     var parentOf = { campaign: function () { return ""; }, adset: function (x) { return x.campaign_name || ""; }, ad: function (x) { return [x.campaign_name, x.adset_name].filter(Boolean).join(" › "); } };
     var by = sgsView.by, rows = {};
-    function row(k, parent) { return rows[k] || (rows[k] = { name: k, parent: parent, spend: 0, imp: 0, clicks: 0, meta: 0, forms: 0 }); }
+    function row(k, parent) { return rows[k] || (rows[k] = { name: k, parent: parent, spend: 0, imp: 0, clicks: 0, meta: 0, forms: 0, booked: 0 }); }
     ads.forEach(function (x) {
       var r = row(keyOf[by](x), parentOf[by](x));
       r.spend += Number(x.spend || 0); r.imp += Number(x.impressions || 0); r.clicks += Number(x.link_clicks || x.clicks || 0); r.meta += Number(x.leads || 0);
@@ -520,7 +558,9 @@
     leads.forEach(function (l) {
       var x = { campaign_name: l.campaign_name, adset_name: l.adset_name, ad_name: l.ad_name };
       if (!l.ad_id && l.is_organic) { x = { campaign_name: "Organic", adset_name: "Organic", ad_name: "Organic" }; }
-      row(keyOf[by](x), x.campaign_name === "Organic" ? "" : parentOf[by](x)).forms++;
+      if (!l.ad_id && !l.campaign_name && l.fromGhl) { x = { campaign_name: "Website / direct", adset_name: "Website / direct", ad_name: "Website / direct" }; }
+      var rr = row(keyOf[by](x), /^(Organic|Website \/ direct)$/.test(x.campaign_name) ? "" : parentOf[by](x));
+      rr.forms++; if (isBooked(l)) { rr.booked++; }
     });
     var list = Object.keys(rows).map(function (k) { var r = rows[k]; r.leads = Math.max(r.meta, r.forms); r.cpl = r.leads && r.spend ? r.spend / r.leads : null; return r; })
       .filter(function (r) { return r.spend || r.leads; });
@@ -538,21 +578,23 @@
     };
 
     el.innerHTML = '<div class="cl-wrap al">' +
-      '<div class="cl-head"><div><h1>SGS Leads</h1><p class="muted">Solid Gold Systems\' own Meta ads. ' + esc(windowLabel()) + ".</p></div>" + rangeBar() + "</div>" +
+      '<div class="cl-head"><div><h1>SGS Leads</h1><p class="muted">Solid Gold Systems\' own leads: Meta ads, website and funnels (from GHL). ' + esc(windowLabel()) + ".</p></div>" + rangeBar() + "</div>" +
       '<div class="stats">' +
-        stat("Leads", total, leads.length + " from lead forms" + (metaLeads > leads.length ? ", rest from website" : "")) +
+        stat("Leads", total, leads.length + " with contact info" + (metaLeads > leads.length ? " (Meta counted " + metaLeads + ")" : "")) +
         stat("Ad spend", money2(spend), "") +
         stat("Cost per lead", total && spend ? money2(spend / total) : "—", best ? "Best: " + best.name.slice(0, 40) + " (" + money2(best.cpl) + ")" : "") +
+        stat("Booked calls", leads.filter(isBooked).length, leads.length ? Math.round(100 * leads.filter(isBooked).length / leads.length) + "% of leads · " + leads.filter(function (l) { return stageClass(l.stage) === "won"; }).length + " sold" : "") +
         stat("Link clicks", clicks.toLocaleString("en-US"), imp ? (100 * clicks / imp).toFixed(2) + "% CTR · " + (clicks ? money2(spend / clicks) + " per click" : "") : "") +
       "</div>" +
       sgsChart(w, byDay) +
       '<div class="al-sec"><h2>What\'s working</h2>' + seg("by", [["campaign", "Campaigns"], ["adset", "Ad sets"], ["ad", "Ads"]], by) +
         '<span class="spacer"></span>' + seg("sort", [["spend", "Most spend"], ["leads", "Most leads"], ["cpl", "Cheapest lead"]], sgsView.sort) + "</div>" +
-      '<div class="al-table sg-table"><div class="al-row sg-row al-th"><span>' + { campaign: "Campaign", adset: "Ad set", ad: "Ad" }[by] + "</span><span>Spend</span><span>Leads</span><span>Cost per lead</span><span>Clicks</span><span>CTR</span></div>" +
+      '<div class="al-table sg-table"><div class="al-row sg-row al-th"><span>' + { campaign: "Campaign", adset: "Ad set", ad: "Ad" }[by] + "</span><span>Spend</span><span>Leads</span><span>Cost per lead</span><span>Booked</span><span>Clicks</span><span>CTR</span></div>" +
         (list.length ? list.map(function (r) {
           return '<div class="al-row sg-row"><span class="al-name"><b>' + esc(r.name) + "</b>" + (r.parent ? "<small>" + esc(r.parent) + "</small>" : "") + "</span>" +
             "<span>" + money2(r.spend) + '</span><span class="al-n' + (r.leads ? "" : " zero") + '">' + r.leads + "</span>" +
             "<span" + (best && r === best ? ' class="sg-best"' : "") + ">" + (r.cpl != null ? money2(r.cpl) : "—") + "</span>" +
+            "<span>" + (r.booked ? '<b class="sg-bk">' + r.booked + "</b>" : '<span class="muted">0</span>') + "</span>" +
             "<span>" + (r.clicks ? r.clicks.toLocaleString("en-US") : "—") + "</span><span>" + (r.imp ? (100 * r.clicks / r.imp).toFixed(2) + "%" : "—") + "</span></div>";
         }).join("") : '<p class="muted" style="padding:16px">' + (d.ads && d.ads.length ? "No ad activity in these dates." : "Ad-level numbers start with the next Meta refresh.") + "</p>") +
       "</div>" +

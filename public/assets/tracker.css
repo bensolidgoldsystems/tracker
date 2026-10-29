@@ -448,7 +448,7 @@ a.al-row:hover{background:var(--card)}
 .al-sec{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:26px 0 10px}
 .al-sec h2{font-size:18px;margin:0 8px 0 0}
 .seg.sm .seg-b{padding:5px 10px;font-size:12.5px}
-.sg-row{grid-template-columns:minmax(0,2fr) 100px 70px 110px 80px 70px}
+.sg-row{grid-template-columns:minmax(0,2fr) 100px 70px 110px 80px 80px 70px}
 .sg-best{color:var(--ok);font-weight:700}
 .sg-chart{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px 6px;margin-top:14px}
 .sg-chart svg{width:100%;height:190px;display:block}
@@ -469,3 +469,8 @@ a.al-row:hover{background:var(--card)}
   .sg-chart svg{height:150px}
 }
 .sg-row .al-name small{text-transform:none}
+.al-stage{font-style:normal;font-weight:600;font-size:11px;padding:2px 8px;border-radius:99px;margin-left:8px;vertical-align:2px;border:1px solid var(--line);color:var(--muted)}
+.al-stage.st-booked{color:var(--gold);border-color:var(--gold-line);background:var(--gold-soft)}
+.al-stage.st-won{color:var(--ok);border-color:currentColor}
+.al-stage.st-lost{color:var(--faint)}
+.sg-bk{color:var(--gold)}

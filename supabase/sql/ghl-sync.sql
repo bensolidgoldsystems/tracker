@@ -1,0 +1,7 @@
+-- GHL leads (see supabase/functions/ghl-sync). Applied as migration "ghl_contacts".
+-- Daily schedule (after meta-sync at 10:20 UTC):
+-- select cron.schedule('ghl-sync-daily', '35 10 * * *', $$select net.http_post(
+--   url := 'https://hipuhixrfabjnbtwrldn.supabase.co/functions/v1/ghl-sync',
+--   headers := jsonb_build_object('Content-Type','application/json','x-cron-secret', public.meta_sync_secret()),
+--   body := '{}'::jsonb, timeout_milliseconds := 150000)$$);
+-- Secrets: GHL_API_KEY (private integration token, read-only scopes), GHL_LOCATION_ID.
