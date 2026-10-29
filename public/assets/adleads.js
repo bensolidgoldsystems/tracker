@@ -1,4 +1,4 @@
-/* Solid Gold Systems Tracker - Ad Leads tab (#adleads, #adleads/<client id>, #adleads/unmatched)
+/* Solid Gold Systems Tracker - Client Leads tab (#adleads, #adleads/<client id>, #adleads/unmatched)
    Every lead from Meta instant forms (public.meta_leads, synced each morning by meta-sync),
    grouped by client, with the lead's details and form answers. Ad spend comes from the daily
    numbers in public.meta_daily. Each client can be sent a branded PDF report for any dates. */
@@ -90,7 +90,7 @@
 
   async function route(hash, container) {
     el = container;
-    // Ad Leads and SGS Leads share element ids; keep only the one on screen in the page.
+    // Client Leads and SGS Leads share element ids; keep only the one on screen in the page.
     ["adLeadsView", "sgsView"].forEach(function (id) { var v = $(id); if (v && v !== container) { v.innerHTML = ""; } });
     el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
     var sgs = /^#sgs/.test(hash);
@@ -154,7 +154,7 @@
     var spend = rows.reduce(function (n, x) { return n + x.s.spend; }, 0);
 
     el.innerHTML = '<div class="cl-wrap al">' +
-      '<div class="cl-head"><div><h1>Ad Leads</h1><p class="muted">Every lead your Meta ads brought in, by client. ' + esc(windowLabel()) + ".</p></div>" + rangeBar() + "</div>" +
+      '<div class="cl-head"><div><h1>Client Leads</h1><p class="muted">Every lead your Meta ads brought in, by client. ' + esc(windowLabel()) + ".</p></div>" + rangeBar() + "</div>" +
       '<div class="stats">' +
         stat("Leads", total, listed + " with contact info") +
         stat("Ad spend", money(spend), "All clients") +
@@ -180,7 +180,7 @@
   /* ---------- one client ---------- */
   function drawClient(id) {
     var c = id === "unmatched" ? null : d.clients.filter(function (x) { return x.id === id; })[0];
-    if (id !== "unmatched" && !c) { el.innerHTML = '<div class="cl-wrap"><a class="back" href="#adleads">← Ad Leads</a><p class="muted">Client not found.</p></div>'; return; }
+    if (id !== "unmatched" && !c) { el.innerHTML = '<div class="cl-wrap"><a class="back" href="#adleads">← Client Leads</a><p class="muted">Client not found.</p></div>'; return; }
     var s = statsFor(c);
     var qv = view.q.toLowerCase();
     var list = s.inRange.filter(function (l) {
@@ -191,7 +191,7 @@
     var week = s.all.filter(function (l) { return localDay(l.created_time) >= ymd(new Date(Date.now() - 6 * 864e5)); }).length;
 
     el.innerHTML = '<div class="cl-wrap al">' +
-      '<a class="back" href="#adleads">← Ad Leads</a>' +
+      '<a class="back" href="#adleads">← Client Leads</a>' +
       '<div class="cl-head"><div><h1>' + esc(c ? c.business_name : "Not matched to a client") + "</h1>" +
         (c ? '<p class="muted">' + esc(windowLabel()) + ' · <a href="#client/' + c.id + '">Client profile</a> · <a href="#ppl/' + c.id + '">Pay per lead</a></p>' : '<p class="muted">Leads from Pages or ads Tracker couldn\'t tie to a client. Pick the client for each one.</p>') + "</div>" +
         rangeBar() + "</div>" +
