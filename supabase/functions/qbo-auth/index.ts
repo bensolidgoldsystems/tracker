@@ -50,7 +50,7 @@ async function tokenCall(params: Record<string, string>) {
     body: new URLSearchParams(params).toString(),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error("QuickBooks sign-in failed: " + (body.error_description || body.error || res.status));
+  if (!res.ok) throw new Error("QuickBooks sign-in failed: " + (body.error_description || body.error || res.status) + " (intuit_tid " + (res.headers.get("intuit_tid") || "n/a") + ")");
   return body;
 }
 function expiry(sec: number) { return new Date(Date.now() + (Number(sec) || 3600) * 1000 - 60000).toISOString(); }
@@ -71,7 +71,8 @@ async function qbo(c: any, path: string) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const f = body.Fault && body.Fault.Error && body.Fault.Error[0];
-    throw new Error("QuickBooks: " + ((f && (f.Detail || f.Message)) || res.status));
+    // intuit_tid identifies the request for Intuit support.
+    throw new Error("QuickBooks: " + ((f && (f.Detail || f.Message)) || res.status) + " (intuit_tid " + (res.headers.get("intuit_tid") || "n/a") + ")");
   }
   return body;
 }
@@ -121,6 +122,7 @@ async function sync() {
     return { ok: true, months: months.length, rows: rows.length };
   } catch (e) {
     const message = String((e as Error).message || e).slice(0, 500);
+    console.error("qbo sync failed:", message);
     await db.from("qbo_pnl").upsert({ id: 1, ok: false, message, fetched_at: new Date().toISOString() });
     return { ok: false, message };
   }
@@ -145,7 +147,7 @@ Deno.serve(async (req) => {
         connected_by: st.created_by, updated_at: new Date().toISOString() });
       await sync();
       return back("connected");
-    } catch (_) { return back("failed"); }
+    } catch (e) { console.error("qbo connect failed:", (e as Error).message); return back("failed"); }
   }
 
   if (req.method !== "POST") return json(req, 405, { error: "Method not allowed" });
