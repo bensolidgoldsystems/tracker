@@ -5,6 +5,7 @@ Internal tool for Solid Gold Systems website leads: **tracker.solidgoldsystems.c
 Internal only (login required). Modules:
 
 - **Overview** (home): this month's revenue, ad spend on our cards, payouts and net; what needs attention (ad spend we fronted that hasn't been reimbursed, missing payments, lead counts, lead prices to set, onboarding clients).
+- **Pay per lead**: each pay-per-lead client's leads per day (Meta), what's been billed, and a Charge button per day that bills the saved card in Stripe ("3 Leads - 10/27/26") through the `ppl-charge` Edge Function. Needs the Supabase secret `STRIPE_SECRET_KEY` (restricted key). One charge per day; charging a billed day again needs a second confirm.
 - **Reports**: the bookkeeping sheet, month by month. Summary, Revenue, Pay per lead, Ad spend and reimbursement (with each client's running balance), and Pay 633 Studios. Click any month to see, add, edit or delete amounts (`money_entries`).
 
 - **Clients**: every client's profile, contacts, partner (e.g. 633 Studios), services with their own prices (price history kept), ad accounts, who pays Meta, and an ad launch/pause timeline. Monthly recurring totals per client, per partner and overall. Services catalog and partners are edited in Settings.
@@ -39,6 +40,7 @@ public/assets/schema.js      THE list of questions, file types, checklist and st
 public/assets/tracker.js     Tracker shell: sign-in, 2FA, routing, Website Leads, Admin, Settings
 public/assets/clients.js     Clients module: clients, contacts, partners, services and prices, ad timeline
 public/assets/reports.js     Overview, Reports (bookkeeping sheet), client money panel, Meta settings
+public/assets/ppl.js         Pay per lead tab
 public/assets/config.js      Public Supabase URL + anon key
 ```
 
@@ -58,6 +60,7 @@ Supabase Edge Functions (no Netlify credits; source in `supabase/functions/`):
 - `email-2fa`: sends and checks the codes. Needs the Supabase secret `RESEND_API_KEY`.
 - `admin-users`: Admin page actions (list, invite, copy invite link, change role, sign out, remove). Admins only.
 - `meta-sync`: daily Meta spend + leads (see Meta ads above).
+- `ppl-charge`: Pay per lead tab (card on file, past lead charges, charge a day). Secret `STRIPE_SECRET_KEY`.
 
 ## Giving someone access
 

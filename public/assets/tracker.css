@@ -353,3 +353,36 @@ a.cl-row:hover{background:var(--card)}
   .bars{height:140px}
 }
 .sheet .grp-h .mode b.unb{color:var(--gold);font-weight:600}
+
+/* ---------- pay per lead ---------- */
+#pplView{padding:18px clamp(16px,3vw,32px) 60px;max-width:1100px;margin:0 auto}
+.ppl-clients{margin-bottom:14px;width:max-content;max-width:100%}
+.ppl-clients .seg-b{text-decoration:none}
+.stat.warn b{color:var(--warn)}
+.stat small a{color:var(--gold)}
+.ppl-days{padding:6px 18px}
+.ppl-row{display:grid;grid-template-columns:140px 110px minmax(0,1fr) auto;gap:14px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.ppl-row:first-child{border-top:0}
+.ppl-th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:10px 0}
+.ppl-day b{display:block;font-size:14px}
+.ppl-day small{font-size:12px;color:var(--faint)}
+.ppl-n{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.ppl-row.due .ppl-n{color:var(--gold)}
+.ppl-row.done{opacity:.85}
+.ppl-charge{display:flex;align-items:center;gap:10px}
+.ppl-charge .inp{width:84px;padding:8px 10px;text-align:center;font-weight:700}
+.ppl-amt{font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
+.ppl-billed{font-size:14px;color:var(--muted)}
+.ppl-note{font-size:13px}
+@media (max-width:700px){
+  .ppl-row{grid-template-columns:1fr auto;gap:8px 12px}
+  .ppl-th{display:none}
+  .ppl-n{text-align:right}
+  .ppl-row>:nth-child(3){grid-column:1}
+}
+.stat b em{font-style:normal}
+@media (max-width:700px){
+  .tabs{overflow-x:auto;scrollbar-width:none;gap:2px}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{white-space:nowrap;padding:8px 10px;font-size:13px;flex:0 0 auto}
+}

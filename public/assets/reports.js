@@ -240,7 +240,8 @@
       if (leads) {
         var price = Number(pl[0].price || 0);
         items.push({ pri: 2, html: "<b>" + esc(c.business_name) + "</b>: " + leads + " lead" + (leads === 1 ? "" : "s") + " this month" +
-          (price ? " (" + money(leads * price) + " at " + money(price) + "/lead, " + money(val(c.id, key, "per_lead")) + " billed)" : "") });
+          (price ? " (" + money(leads * price) + " at " + money(price) + "/lead, " + money(val(c.id, key, "per_lead")) + " billed)" : "") +
+          ' <a href="#ppl/' + c.id + '">Charge</a>' });
       }
       if (!Number(pl[0].price)) {
         items.push({ pri: 3, html: "Set a lead price for <a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a>" });
