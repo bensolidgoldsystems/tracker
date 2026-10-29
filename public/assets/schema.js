@@ -60,9 +60,9 @@
     {
       id: "photos", num: "04", title: "Photos of Your Work", sub: "Past jobs, before/afters, products, your shop or trucks, and you and your team. Real photos convert far better than stock.",
       fields: [
-        { id: "photos_link", label: "Link to your photos", labelNote: "recommended", type: "url", ph: "Google Drive, Dropbox, iCloud or Google Photos link", hint: "Make the link viewable by anyone who has it." },
-        { id: "photos", label: "Or upload them here", type: "files", kind: "photos", max: 80, accept: "image/*,video/*,.heic,.heif", btn: "Upload photos", btnSub: "Full quality. Select as many as you like." },
-        { id: "before_after", label: "Before & after photos", type: "files", kind: "before_after", half: true, max: 30, accept: "image/*,video/*,.heic,.heif", btn: "Upload before & afters", btnSub: "If your work has them" },
+        { id: "photos_link", label: "Link to your photos", labelNote: "recommended", type: "url", ph: "Google Drive, Dropbox, iCloud or Google Photos link", hint: "Best for lots of photos or any videos. Make the link viewable by anyone who has it." },
+        { id: "photos", label: "Or upload them here", type: "files", kind: "photos", max: 25, accept: "image/*,.heic,.heif", btn: "Upload photos", btnSub: "Up to 25, full quality. Your best ones." },
+        { id: "before_after", label: "Before & after photos", type: "files", kind: "before_after", half: true, max: 15, accept: "image/*,.heic,.heif", btn: "Upload before & afters", btnSub: "If your work has them" },
         { id: "headshots", label: "Owner or team photos", type: "files", kind: "headshots", half: true, max: 15, accept: "image/*,.heic,.heif", btn: "Upload headshots", btnSub: "People trust faces" }
       ]
     },
