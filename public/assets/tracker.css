@@ -206,6 +206,11 @@ a.cl-row:hover{background:var(--card)}
 .p-row{grid-template-columns:minmax(0,1fr) 160px 160px;padding:12px 0}
 .metaval{font-size:18px;font-weight:700;padding:6px 0}
 .metaval small{font-size:12px;color:var(--faint);font-weight:500}
+.metaval small.blk{display:block;margin-top:2px}
+.cl-ads small.cl-cycle{color:var(--muted)}
+.timeline li.tl-replaced{opacity:.5}
+.timeline .tl-src{font-size:10px;padding:1px 6px;vertical-align:1px}
+.todo li .done-btn{margin-left:8px}
 .svc-list{display:flex;flex-direction:column}
 .svc-row{display:flex;justify-content:space-between;align-items:center;gap:14px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:11px 4px;color:var(--text);text-decoration:none;border-radius:0}
 .svc-row:first-child{border-top:0}
@@ -276,6 +281,9 @@ a.cl-row:hover{background:var(--card)}
 .todo li.p1::before{background:var(--bad)}
 .todo li.p2::before{background:var(--gold)}
 .todo li.ok::before{background:var(--ok)}
+.todo li.ad-on::before{background:var(--ok);box-shadow:0 0 0 3px rgba(91,208,138,.2)}
+.todo li.ad-off::before{background:var(--warn);box-shadow:0 0 0 3px rgba(242,166,90,.2)}
+.todo li.p0{font-weight:500}
 .todo a{margin-left:4px;white-space:nowrap}
 .bars{display:flex;align-items:flex-end;gap:6px;height:170px;padding-top:18px}
 .bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;position:relative;min-width:0}

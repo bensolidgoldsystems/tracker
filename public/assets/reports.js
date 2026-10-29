@@ -51,14 +51,12 @@
   function byId(list, id) { for (var i = 0; i < list.length; i++) { if (list[i].id === id) { return list[i]; } } return null; }
   function weFront(c) { return /^sgs_/.test(c.ad_spend_mode || ""); }
 
-  // Same rule as the Clients page: Active/Paused follow the ads switch once its dates arrive.
+  // Same rule as the Clients page: Active/Paused follow the ads (Meta dates first, see adstate.js).
   function statusOf(c) {
     if (c.status !== "active" && c.status !== "paused") { return c.status; }
-    var t = todayStr();
-    var ev = d.events.filter(function (e) { return e.client_id === c.id && e.kind !== "note" && e.event_date <= t; })
-      .sort(function (a, b) { return a.event_date < b.event_date ? 1 : a.event_date > b.event_date ? -1 : (a.created_at < b.created_at ? 1 : -1); });
-    if (!ev.length) { return c.status; }
-    return ev[0].kind === "launched" || ev[0].kind === "relaunched" ? "active" : "paused";
+    var st = window.SGSAds.state(d.events, c.id);
+    if (!st) { return c.status; }
+    return st === "live" ? "active" : "paused";
   }
   function statusBadge(st) {
     var cls = st === "active" ? "ok" : st === "onboarding" ? "gold" : st === "paused" ? "warn" : "";
@@ -72,7 +70,7 @@
       q(T.sb.from("partners").select("*").order("name")),
       q(T.sb.from("client_services").select("*")),
       q(T.sb.from("services").select("id,name")),
-      q(T.sb.from("ad_events").select("client_id,kind,event_date,created_at")),
+      q(T.sb.from("ad_events").select("*")),
       all(function () { return T.sb.from("money_entries").select("*").order("entry_date", { ascending: true, nullsFirst: true }).order("id"); }),
       all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_ad_accounts").select("*").order("name")),
@@ -248,6 +246,7 @@
         }).join("") + "</div></div>" +
         metaStatusPanel() +
       "</aside></div></div>";
+    wireReminders(el);
     liveBalances();
   }
   function kpi(label, value, sub, cls) {
@@ -295,6 +294,7 @@
         items.push({ pri: 3, html: "Set a lead price for <a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a>" });
       }
     });
+    adReminders(items);
     var onb = d.clients.filter(function (c) { return statusOf(c) === "onboarding"; });
     if (onb.length) {
       items.push({ pri: 3, html: onb.length + " client" + (onb.length === 1 ? "" : "s") + " onboarding: " + onb.map(function (c) { return '<a href="#client/' + c.id + '">' + esc(c.business_name) + "</a>"; }).join(", ") });
@@ -309,7 +309,58 @@
     if (!run) { items.push({ pri: 3, html: 'Meta isn\'t connected yet. Ad spend and leads will update every hour once it is. <a href="#settings">Settings</a>' }); }
     else if (run.ok === false) { items.push({ pri: 1, html: "Last Meta sync had a problem: " + esc(run.message || "unknown error") + ' <a href="#settings">Settings</a>' }); }
     if (!items.length) { return '<li class="ok">All caught up.</li>'; }
-    return items.sort(function (a, b) { return a.pri - b.pri; }).map(function (i) { return '<li class="p' + i.pri + '">' + i.html + "</li>"; }).join("");
+    return items.sort(function (a, b) { return a.pri - b.pri; }).map(function (i) { return '<li class="p' + i.pri + (i.cls ? " " + i.cls : "") + '">' + i.html + "</li>"; }).join("");
+  }
+  /* Ads went live / paused (from Meta) -> start or pause billing. Each stays until Done is clicked
+     (sets ad_events.seen_at). Billing-cycle charges due in the next 2 days show on their own. */
+  var REMIND_DAYS = 14;
+  function adReminders(items) {
+    var t = todayStr(), cutoff = new Date(Date.now() - REMIND_DAYS * 864e5).toISOString().slice(0, 10);
+    d.events.filter(function (e) {
+      return e.source === "meta" && !e.seen_at && e.event_date >= cutoff && e.event_date <= t && /^(launched|relaunched|paused)$/.test(e.kind);
+    }).sort(function (a, b) { return a.event_date < b.event_date ? 1 : -1; }).forEach(function (e) {
+      var c = byId(d.clients, e.client_id); if (!c) { return; }
+      var name = '<a href="#client/' + c.id + '"><b>' + esc(c.business_name) + "</b></a>";
+      var mo = monthlyServices(c.id).concat(d.cs.filter(function (x) { return x.client_id === c.id && x.billing_type === "monthly" && x.status === "paused"; }));
+      var price = mo.reduce(function (a, x) { return a + Number(x.price || 0); }, 0);
+      var ppl = perLeadServices(c.id).length;
+      var what = e.kind === "paused"
+        ? "Ads paused for " + name + " on " + esc(dateShort(e.event_date)) + ". " + (price ? "Pause their billing (" + money(price) + "/mo)." : ppl ? "No new leads to bill while paused." : "Pause billing if they have any.")
+        : "Ads went live for " + name + " on " + esc(dateShort(e.event_date)) + (e.kind === "relaunched" ? " (back on)" : "") + ". " +
+          (price ? (e.kind === "relaunched" ? "Restart their billing" : "Start their subscription") + " (" + money(price) + "/mo)." : ppl ? "Lead billing is on." : "Start charging them.");
+      items.push({ pri: 0, cls: e.kind === "paused" ? "ad-off" : "ad-on", html: what +
+        ' <button class="btn sm done-btn" data-seen="' + e.id + '">Done</button>' });
+    });
+    d.clients.forEach(function (c) {
+      if (statusOf(c) === "churned") { return; }
+      var st = window.SGSAds.state(d.events, c.id);
+      if (st !== "live" && window.SGSAds.delivering(d.accounts, c)) {
+        items.push({ pri: 1, cls: "ad-on", html: 'A campaign is on in Meta for <a href="#client/' + c.id + '"><b>' + esc(c.business_name) + "</b></a> but nothing has spent yet. Billing starts the day it does." });
+      }
+      if (st !== "live" || !d.cs.some(function (x) { return x.client_id === c.id && x.billing_type === "monthly" && x.status !== "ended"; })) { return; }
+      var b = window.SGSAds.cycle(d.events, c.id);
+      if (!b) { return; }
+      var price = monthlyServices(c.id).reduce(function (a, x) { return a + Number(x.price || 0); }, 0);
+      var link = '<a href="#client/' + c.id + '"><b>' + esc(c.business_name) + "</b></a>";
+      if (b.day === 1 && b.cycle > 1) {
+        items.push({ pri: 1, html: link + ": billing cycle " + b.cycle + " starts today" + (price ? ". Charge " + money(price) + "." : ".") });
+      } else if (b.daysLeft <= 1) {
+        items.push({ pri: 2, html: link + ": billing cycle " + (b.cycle + 1) + " starts " + esc(dateShort(b.nextCharge)) + (price ? " (" + money(price) + ")" : "") + "." });
+      }
+    });
+  }
+  function wireReminders(el) {
+    el.querySelectorAll("[data-seen]").forEach(function (btn) {
+      btn.onclick = async function () {
+        btn.disabled = true;
+        try {
+          await q(T.sb.from("ad_events").update({ seen_at: new Date().toISOString() }).eq("id", btn.dataset.seen));
+          var e = byId(d.events, btn.dataset.seen); if (e) { e.seen_at = new Date().toISOString(); }
+          var li = btn.closest("li"); if (li) { li.remove(); }
+          var ul = $("ovTodo"); if (ul && !ul.children.length) { ul.innerHTML = '<li class="ok">All caught up.</li>'; }
+        } catch (err) { btn.disabled = false; T.fail(err); }
+      };
+    });
   }
   function metaStatusPanel() {
     var run = d.runs[0];

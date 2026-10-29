@@ -9,7 +9,8 @@
 //   - individual leads from instant forms on every Page the system user can see (needs the Page
 //     assigned with Leads access and the token to include leads_retrieval, pages_show_list,
 //     pages_read_engagement, pages_manage_ads) -> public.meta_leads, matched to clients by ad account.
-// Called daily by pg_cron (x-cron-secret header) and by "Sync now" in Tracker Settings
+//   - when each client's ads went live / paused -> public.ad_events (source 'meta').
+// Called by pg_cron (x-cron-secret header) and by "Sync now" in Tracker Settings
 // (signed-in team member whose sign-in passed email 2FA).
 // Secrets: META_ACCESS_TOKEN (system user token, ads_read), optional META_API_VERSION.
 // Cron secret: Supabase Vault 'meta_sync_secret' (see supabase/sql/meta-sync.sql).
@@ -168,6 +169,53 @@ async function syncAdDaily(acct: string, token: string, sinceOverride?: string):
   return n;
 }
 
+// Ads live / paused per client, from Meta: a day is "live" when the client's accounts spent $1+;
+// a gap of more than GAP_DAYS without spend means the ads were paused (dated the day after the last
+// spend). Today's state also uses whether any campaign is ACTIVE, so a pause shows within the hour.
+const GAP_DAYS = 3;
+async function syncAdEvents(clients: any[], delivering: Record<string, boolean>) {
+  const today = nyDate(new Date().toISOString());
+  let made = 0;
+  for (const c of clients) {
+    const accts = (c.meta_ad_account_ids || []).filter((x: string) => /^\d+$/.test(x));
+    if (!accts.length) continue;
+    const spend: Record<string, number> = {};
+    for (let from = 0; from < 20000; from += 1000) {
+      const { data } = await db.from("meta_daily").select("day,spend").in("ad_account_id", accts).gt("spend", 0).order("day").range(from, from + 999);
+      for (const r of data || []) spend[r.day] = (spend[r.day] || 0) + Number(r.spend);
+      if (!data || data.length < 1000) break;
+    }
+    const days = Object.keys(spend).filter((k) => spend[k] >= 1).sort();
+    if (!days.length) continue;
+    const gap = (a: string, b: string) => Math.round((new Date(b + "T12:00:00Z").getTime() - new Date(a + "T12:00:00Z").getTime()) / 864e5);
+    const events: { kind: string; day: string; note: string }[] = [];
+    let start = days[0], last = days[0];
+    const close = (s0: string, e0: string, isLast: boolean) => {
+      events.push({ kind: events.length ? "relaunched" : "launched", day: s0, note: "From Meta: ads started spending" });
+      const active = accts.some((a: string) => delivering[a]);
+      const stale = gap(e0, today) > GAP_DAYS;
+      if (!isLast || stale || (!active && accts.every((a: string) => delivering[a] !== undefined))) {
+        const pd = addDays(e0, 1) > today ? today : addDays(e0, 1);
+        events.push({ kind: "paused", day: pd, note: stale ? "From Meta: no ad spend since " + e0 : "From Meta: no active campaigns" });
+      }
+    };
+    for (let i = 1; i < days.length; i++) {
+      if (gap(last, days[i]) > GAP_DAYS) { close(start, last, false); start = days[i]; }
+      last = days[i];
+    }
+    close(start, last, true);
+    const rows = events.map((e) => ({ client_id: c.id, kind: e.kind, event_date: e.day, note: e.note, source: "meta", ad_account_id: accts[0] }));
+    const { data: old } = await db.from("ad_events").select("id,kind,event_date").eq("client_id", c.id).eq("source", "meta");
+    const want = new Set(rows.map((r) => r.kind + "|" + r.event_date));
+    const stale = (old || []).filter((o: any) => !want.has(o.kind + "|" + o.event_date)).map((o: any) => o.id);
+    if (stale.length) await db.from("ad_events").delete().in("id", stale);
+    const have = new Set((old || []).map((o: any) => o.kind + "|" + o.event_date));
+    const add = rows.filter((r) => !have.has(r.kind + "|" + r.event_date));
+    if (add.length) { const { error } = await db.from("ad_events").insert(add); if (error) throw error; made += add.length; }
+  }
+  return made;
+}
+
 // Pull a lead's contact basics out of its form answers.
 function contactOf(fields: any[]) {
   const get = (re: RegExp) => { const f = (fields || []).find((x) => re.test(String(x.name || ""))); return f && f.values ? String(f.values[0] || "") : ""; };
@@ -311,9 +359,23 @@ async function runSync(trigger: string, sinceOverride?: string) {
         await db.from("meta_ad_accounts").upsert({ ad_account_id: id, last_error: msg.slice(0, 500) }, { onConflict: "ad_account_id" });
       }
     }
-    // 3. Individual leads from instant forms.
+    // 3. Is anything running right now? (an ACTIVE campaign in the account)
+    const delivering: Record<string, boolean> = {};
+    for (const id of ids) {
+      if (!acctClient[id]) continue;
+      try {
+        const r = await graph("/act_" + id + "/campaigns", { effective_status: JSON.stringify(["ACTIVE"]), fields: "id", limit: "1" }, token);
+        delivering[id] = !!(r.data && r.data.length);
+        await db.from("meta_ad_accounts").upsert({ ad_account_id: id, delivering: delivering[id], delivering_at: new Date().toISOString() }, { onConflict: "ad_account_id" });
+      } catch (_) { /* unknown: spend history decides */ }
+    }
+    let adEvents = 0;
+    try { adEvents = await syncAdEvents(linked || [], delivering); }
+    catch (e) { problems.push("ads on/off: " + String((e as Error).message || e)); }
+
+    // 4. Individual leads from instant forms.
     const lr = await syncLeads(token, acctClient);
-    const message = (lr.added ? lr.added + " new lead(s). " : "") + (lr.problems.length ? "Leads: " + lr.problems.join(" | ").slice(0, 400) + ". " : "") + (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
+    const message = (adEvents ? adEvents + " ads on/off change(s). " : "") + (lr.added ? lr.added + " new lead(s). " : "") + (lr.problems.length ? "Leads: " + lr.problems.join(" | ").slice(0, 400) + ". " : "") + (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
     await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok: !problems.length, accounts, rows, message }).eq("id", run?.id);
     return { ok: !problems.length, configured: true, accounts, rows, message };
   } catch (e) {
@@ -327,7 +389,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors(req) });
   if (req.method !== "POST") return json(req, 405, { error: "Method not allowed" });
 
-  // The daily schedule sends a secret kept in Supabase Vault (read with the service key).
+  // The schedule sends a secret kept in Supabase Vault (read with the service key).
   let fromCron = false;
   const sent = req.headers.get("x-cron-secret") || "";
   if (sent) {

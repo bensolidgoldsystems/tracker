@@ -5,7 +5,7 @@
 (function () {
   "use strict";
   var T = null;                 // shared helpers from tracker.js
-  var data = { clients: [], services: [], partners: [], cs: [], events: [] };
+  var data = { clients: [], services: [], partners: [], cs: [], events: [], accounts: [] };
   var filter = { q: "", status: "current" };
 
   var STATUS = [
@@ -61,22 +61,18 @@
   function perLeadOf(client) {
     return clientServices(client.id).filter(function (x) { return x.status === "active" && x.billing_type === "per_lead"; });
   }
-  function adEvents(clientId, includeFuture) {
-    var t = today();
-    return data.events.filter(function (e) { return e.client_id === clientId && e.kind !== "note" && (includeFuture || e.event_date <= t); })
-      .sort(function (a, b) { return a.event_date < b.event_date ? 1 : a.event_date > b.event_date ? -1 : (a.created_at < b.created_at ? 1 : -1); });
+  // Ads on/off: Meta-detected dates win over hand-entered ones (see adstate.js).
+  function adEvents(clientId, includeFuture) { return window.SGSAds.events(data.events, clientId, includeFuture); }
+  function adsLiveSince(clientId) { return window.SGSAds.liveSince(data.events, clientId); }
+  function adsState(clientId) { return window.SGSAds.state(data.events, clientId); }
+  function billCycle(c) {
+    if (!clientServices(c.id).some(function (x) { return x.billing_type === "monthly" && x.status !== "ended"; })) { return null; }
+    return window.SGSAds.cycle(data.events, c.id);
   }
-  // Start of the current live stretch (most recent launch/relaunch), or null.
-  function adsLiveSince(clientId) {
-    var ev = adEvents(clientId);
-    if (!ev.length || (ev[0].kind !== "launched" && ev[0].kind !== "relaunched")) { return null; }
-    return ev[0].event_date;
-  }
-  // "live", "paused", "stopped" or null, as of today.
-  function adsState(clientId) {
-    var ev = adEvents(clientId);
-    if (!ev.length) { return null; }
-    return ev[0].kind === "launched" || ev[0].kind === "relaunched" ? "live" : ev[0].kind;
+  function cycleText(b) {
+    if (!b) { return ""; }
+    return "Cycle " + b.cycle + ", day " + b.day + " of " + window.SGSAds.CYCLE_DAYS +
+      (b.live ? " · next charge " + dateLong(b.nextCharge) : " · paused, " + b.daysLeft + " live day" + (b.daysLeft === 1 ? "" : "s") + " left");
   }
   function nextScheduled(clientId) {
     var t = today();
@@ -104,9 +100,10 @@
       q(T.sb.from("services").select("*").order("sort")),
       q(T.sb.from("partners").select("*").order("name")),
       q(T.sb.from("client_services").select("*").order("created_at")),
-      q(T.sb.from("ad_events").select("*").order("event_date", { ascending: false }))
+      q(T.sb.from("ad_events").select("*").order("event_date", { ascending: false })),
+      q(T.sb.from("meta_ad_accounts").select("ad_account_id,delivering,delivering_at")).catch(function () { return []; })
     ]);
-    data.clients = res[0]; data.services = res[1]; data.partners = res[2]; data.cs = res[3]; data.events = res[4];
+    data.clients = res[0]; data.services = res[1]; data.partners = res[2]; data.cs = res[3]; data.events = res[4]; data.accounts = res[5];
   }
 
   /* ---------- router ---------- */
@@ -183,13 +180,15 @@
         var p = partner(c.partner_id);
         var list = clientServices(c.id).filter(function (x) { return x.status === "active"; });
         var ppl = perLeadOf(c);
-        var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id);
+        var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id), bc = billCycle(c);
         return '<a class="cl-row" href="#client/' + c.id + '">' +
           '<span class="cl-name"><b>' + esc(c.business_name) + "</b>" + statusBadge(status(c)) + (p ? '<span class="badge">' + esc(p.name) + "</span>" : "") + "</span>" +
           '<span class="cl-svcs">' + (list.length ? list.map(function (x) { return '<i class="chip-s">' + esc((svc(x.service_id) || {}).name || "Service") + "</i>"; }).join("") : '<span class="muted">—</span>') + "</span>" +
           '<span class="cl-money"><b>' + money(monthlyOf(c)) + "</b>" + (ppl.length ? "<small>+ " + ppl.map(function (x) { return money(x.price) + "/lead"; }).join(", ") + "</small>" : "") + "</span>" +
           '<span class="cl-ads">' + (st ? (st === "live" ? '<span class="badge ok">Live</span>' : '<span class="badge warn">' + esc(EVENT[st] || st) + "</span>") : '<span class="muted">—</span>') +
           (live ? "<small>since " + esc(dateLong(live)) + "</small>" : "") +
+          (st !== "live" && window.SGSAds.delivering(data.accounts, c) ? "<small>On in Meta, no spend yet</small>" : "") +
+          (bc ? '<small class="cl-cycle">' + esc(cycleText(bc)) + "</small>" : "") +
           (nx ? "<small>" + esc(nx.kind === "paused" || nx.kind === "stopped" ? "Pausing " : "Going live ") + esc(dateLong(nx.event_date)) + "</small>" : "") + "</span>" +
           "</a>";
       }).join("");
@@ -258,7 +257,7 @@
     var p = partner(c.partner_id);
     var list = clientServices(c.id);
     var ppl = perLeadOf(c);
-    var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id);
+    var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id), bc = billCycle(c);
     if (status(c) !== c.status) {   // a scheduled pause/relaunch date has arrived: store it
       c.status = status(c);
       T.sb.from("clients").update({ status: c.status }).eq("id", c.id).then(function () {});
@@ -280,7 +279,10 @@
           "<span><b>" + (st === "live" ? "Live" : st ? "Paused" : "Not live yet") + "</b><small>" +
           (st === "live" ? "since " + esc(dateLong(live)) : st ? "since " + esc(dateLong((adEvents(c.id)[0] || {}).event_date)) : "") +
           (nx ? (st ? " · " : "") + (nx.kind === "paused" || nx.kind === "stopped" ? "pausing " : "going live ") + esc(dateLong(nx.event_date)) : "") +
+          (st !== "live" && window.SGSAds.delivering(data.accounts, c) ? (st ? " · " : "") + "a campaign is on in Meta, no spend yet" : "") +
           "</small></span></div></div>" +
+        (bc ? '<div class="fld"><label>Billing cycle</label><div class="metaval">Cycle ' + bc.cycle + " · day " + bc.day + " of " + window.SGSAds.CYCLE_DAYS +
+          '<small class="blk">' + (bc.live ? "Next charge " + esc(dateLong(bc.nextCharge)) : "Paused with ads · " + bc.daysLeft + " live day" + (bc.daysLeft === 1 ? "" : "s") + " left when they restart") + "</small></div></div>" : "") +
       "</div>" +
 
       '<div class="layout"><div>' +
@@ -315,17 +317,23 @@
   }
 
   function adsPanel(c) {
-    var ev = data.events.filter(function (e) { return e.client_id === c.id; });
+    var ev = window.SGSAds.mark(data.events, c.id).sort(function (a, b) { return a.event_date < b.event_date ? 1 : a.event_date > b.event_date ? -1 : 0; });
+    var hasMeta = ev.some(function (e) { return e.source === "meta"; });
     return '<div class="panel"><h2>Ads <span class="hbtns"><button class="btn sm" id="editAds">Edit ad setup</button><button class="btn sm" id="addEvent">+ Add past date or note</button></span></h2>' +
       '<dl class="ans"><dt>Meta ad account(s)</dt><dd>' + (c.meta_ad_account_ids && c.meta_ad_account_ids.length ? c.meta_ad_account_ids.map(esc).join(", ") : '<span class="muted">Not set. Needed to match Meta billing reports.</span>') + "</dd><span></span></dl>" +
       '<dl class="ans"><dt>Ad spend</dt><dd>' + esc(SPEND[c.ad_spend_mode] || "—") +
         ((c.ad_spend_mode === "sgs_prepaid" || c.ad_spend_mode === "sgs_partner") && (c.prepay_cadence || c.prepay_amount) ? "<br><small class='muted'>" + (c.ad_spend_mode === "sgs_partner" ? "Partner prepays " : "Client prepays ") + esc(money(c.prepay_amount)) + " " + esc((CADENCE[c.prepay_cadence] || "").toLowerCase()) + "</small>" : "") +
       "</dd><span></span></dl>" +
       '<h3 class="sub-h">Timeline</h3>' +
+      (hasMeta ? '<p class="muted" style="font-size:13px;margin:-4px 0 8px">Dates marked Meta come from actual ad spend and update every hour. Ads count as paused after more than 3 days with no spend, or as soon as no campaign is active.</p>' : "") +
       (ev.length ? '<ul class="timeline">' + ev.map(function (e) {
-        return '<li class="tl-' + e.kind + '"><b>' + esc(dateLong(e.event_date)) + "</b> " + esc(EVENT[e.kind] || e.kind) +
-          (e.ad_account_id ? ' <span class="muted">(' + esc(e.ad_account_id) + ")</span>" : "") + (e.note ? " · " + esc(e.note) : "") +
-          ' <button class="linkbtn" data-delev="' + e.id + '" aria-label="Delete">Remove</button></li>';
+        var meta = e.source === "meta", dir = e.kind === "paused" || e.kind === "stopped" ? "off" : "on";
+        return '<li class="tl-' + e.kind + (e._replaced ? " tl-replaced" : "") + '"><b>' + esc(dateLong(e.event_date)) + "</b> " + esc(EVENT[e.kind] || e.kind) +
+          (meta ? ' <span class="badge tl-src">Meta</span>' : "") +
+          (meta ? "" : e.ad_account_id ? ' <span class="muted">(' + esc(e.ad_account_id) + ")</span>" : "") +
+          (e.note && !meta ? " · " + esc(e.note) : meta && /since/.test(e.note || "") ? ' <span class="muted">· ' + esc(e.note.replace(/^From Meta: /, "")) + "</span>" : "") +
+          (e._replaced ? ' <span class="muted">· ' + (e._same ? "already " + (dir === "on" ? "live" : "paused") + " per Meta" : "replaced by the Meta date") + "</span>" : "") +
+          (meta ? "" : ' <button class="linkbtn" data-delev="' + e.id + '" aria-label="Delete">Remove</button>') + "</li>";
       }).join("") + "</ul>" : '<p class="muted" style="font-size:14px">No launches logged yet.</p>') +
       "</div>";
   }
