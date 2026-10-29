@@ -15,7 +15,7 @@ const ALLOWED_ORIGINS = ["https://tracker.solidgoldsystems.com", "https://solidg
 const FIRST_DAY = "2026-01-01";
 const SHOOT_PRICE = 600;          // what the videographer is paid per shoot
 const CARD_SURCHARGE = 0.03;
-const STRIPE_CATS = ["revenue", "per_lead", "ad_reimbursement", "video_shoot", "card_fee"];
+const STRIPE_CATS = ["revenue", "per_lead", "ad_reimbursement", "video_shoot", "card_fee", "stripe_fee"];
 
 const url = Deno.env.get("SUPABASE_URL")!;
 function serviceKey(): string {
@@ -178,13 +178,28 @@ async function runSync(dry = false) {
       }
     }
 
+    // Stripe's processing fees, per payment (needs the key's Balance read permission).
+    let feeNote = "";
+    try {
+      const byCharge: Record<string, any> = {};
+      for (const ch of charges) byCharge[ch.id] = ch;
+      const bts = await stripeAll("/balance_transactions", { "created[gte]": since });
+      for (const bt of bts) {
+        if (!bt.fee || !/^(charge|payment)$/.test(bt.type)) continue;
+        const ch = byCharge[String(bt.source || "")];
+        const cus = ch ? (typeof ch.customer === "string" ? ch.customer : (ch.customer && ch.customer.id) || "") : "";
+        const name = ch ? ((ch.billing_details && ch.billing_details.name) || "") : "";
+        push(clientFor(cus, name), name || "Stripe fees", "stripe_fee", nyDate(bt.created), bt.fee / 100, "stripe:fee:" + bt.id, "Stripe fee" + (ch && ch.description ? ": " + ch.description : ""), null);
+      }
+    } catch (e) { feeNote = " Stripe fees not included: " + String((e as Error).message || e).slice(0, 200); }
+
     if (dry) {
       // Preview only: totals by client / category / month, and what the spreadsheet rows would become.
       const names: Record<string, string> = {};
       for (const c of clients || []) names[c.id] = c.business_name;
       const sum: Record<string, number> = {};
       for (const r of rows) { const k = (names[r.client_id] || "?" ) + " | " + r.category + " | " + r.month.slice(0, 7); sum[k] = cents((sum[k] || 0) + r.amount); }
-      return { ok: true, dry: true, rows: rows.length, totals: sum, unmatched: Object.values(unmatched), link: linkNew };
+      return { ok: true, dry: true, rows: rows.length, totals: sum, unmatched: Object.values(unmatched), link: linkNew, feeNote };
     }
     // Save: Stripe rows are the source of truth for these categories.
     for (const [cid, ids] of Object.entries(linkNew)) {
@@ -223,7 +238,7 @@ async function runSync(dry = false) {
     }
 
     const um = Object.values(unmatched);
-    const message = rows.length + " Stripe entries" + (replace.length ? ", " + replace.length + " spreadsheet rows replaced" : "") + (um.length ? ", " + um.length + " customer(s) not matched to a client" : "");
+    const message = rows.length + " Stripe entries" + (replace.length ? ", " + replace.length + " spreadsheet rows replaced" : "") + (um.length ? ", " + um.length + " customer(s) not matched to a client" : "") + feeNote;
     await db.from("stripe_sync_runs").update({ finished_at: new Date().toISOString(), ok: true, entries: rows.length, message, unmatched: um }).eq("id", run?.id);
     return { ok: true, configured: true, entries: rows.length, replaced: replace.length, unmatched: um, message };
   } catch (e) {

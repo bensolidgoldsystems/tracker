@@ -480,3 +480,4 @@ a.al-row:hover{background:var(--card)}
 .sheet.pl tr.pl-t th,.sheet.pl tr.pl-t td{font-weight:600;border-top:1px solid var(--line)}
 .sheet.pl tr.pl-key th,.sheet.pl tr.pl-key td{color:var(--ok);font-weight:700}
 .sheet.pl tr.pl-key.neg th,.sheet.pl tr.pl-key.neg td{color:var(--bad)}
+.sheet.pl tr.pl-ref th,.sheet.pl tr.pl-ref td{color:var(--faint);font-size:12px;font-style:italic}

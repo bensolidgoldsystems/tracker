@@ -420,7 +420,7 @@
     el.innerHTML = '<div class="cl-wrap rep">' +
       '<div class="cl-head"><div><h1>Reports</h1><p class="muted">Click any month to see or add amounts.</p></div>' +
       '<div class="cl-actions year"><a class="btn sm ghost" href="#reports/' + (y - 1) + '" aria-label="Previous year">←</a><b>' + y + '</b><a class="btn sm ghost" href="#reports/' + (y + 1) + '" aria-label="Next year">→</a></div></div>' +
-      '<nav class="rep-nav">' + (d.pnl && d.pnl.rows && d.pnl.rows.length ? '<a href="#" data-jump="secPnl">Profit &amp; loss</a>' : "") + '<a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
+      '<nav class="rep-nav"><a href="#" data-jump="secPnl">Profit &amp; loss</a><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
       pnlSection(y, keys, curKey) +
       section("secSum", "Summary " + y, "", summary) +
       section("secRev", "Revenue " + y, "Retainers, websites and other one-time work, by the month it was billed.",
@@ -645,32 +645,70 @@
   }
 
   /* ---------- QuickBooks: Profit & Loss by month ---------- */
+  /* Combined profit & loss. Income, client ad spend and Stripe fees come from Tracker (Stripe +
+     Meta + what's entered by hand); every other expense comes from QuickBooks. QuickBooks' own
+     client ad spend line is left out because Tracker's Meta charges are the source of truth. */
+  var AD_SPEND_QBO = /meta ad spend|client ad spend/i;
   function pnlSection(y, keys, curKey) {
     var p = d.pnl;
-    if (!p || !p.rows || !p.rows.length) {
-      return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' +
-        (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") +
-        'Connect QuickBooks in <a href="#settings">Settings</a> to see income, expenses and profit from your books here.</p></section>';
+    var hasQbo = !!(p && p.rows && p.rows.length);
+    var sum = function (cat) { return keys.map(function (k) { return d.entries.reduce(function (s, e) { return s + (e.category === cat && ym(e.month) === k ? Number(e.amount) : 0); }, 0); }); };
+    var add = function (a, b) { return a.map(function (v, i) { return v + b[i]; }); };
+    var neg = function (a) { return a.map(function (v) { return -v; }); };
+    var zero = keys.map(function () { return 0; });
+    var col = keys.map(function (k) { return hasQbo ? p.months.indexOf(k.slice(0, 7)) : -1; });
+    var qv = function (r) { return col.map(function (i) { return i >= 0 && r.values ? r.values[i] : 0; }); };
+
+    var inc = { revenue: sum("revenue"), ppl: sum("per_lead"), prepaid: sum("ad_reimbursement"), shoot: sum("video_shoot"), cardfee: sum("card_fee") };
+    var income = [inc.revenue, inc.ppl, inc.prepaid, inc.shoot, inc.cardfee].reduce(add, zero);
+    var adSpend = keys.map(function (k) { return d.clients.reduce(function (s, c) { return s + spent(c.id, k); }, 0) + spent("none", k); });
+    var fees = sum("stripe_fee");
+    var gross = add(income, neg(add(adSpend, fees)));
+
+    var expRows = [], expTotal = zero;
+    if (hasQbo) {
+      p.rows.forEach(function (r) {
+        if (!/^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") || AD_SPEND_QBO.test(r.name)) { return; }
+        if (r.kind === "line") { expTotal = add(expTotal, qv(r)); expRows.push({ name: r.name, depth: r.depth, v: qv(r) }); }
+        else if (r.kind === "header" && r.depth > 0) { expRows.push({ name: r.name, depth: r.depth, head: true }); }
+      });
     }
-    var col = keys.map(function (k) { return p.months.indexOf(k.slice(0, 7)); });
-    var body = p.rows.map(function (r) {
-      if (r.kind === "header" && !r.values) {
-        return "<tr class='pl-h'><th class='sticky' style='padding-left:" + (14 + r.depth * 14) + "px'>" + esc(r.name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>";
-      }
+    var net = add(gross, neg(expTotal));
+    var qboIncome = zero;
+    if (hasQbo) { p.rows.forEach(function (r) { if (r.kind === "total" && /^total income$/i.test(r.name)) { qboIncome = qv(r); } }); }
+
+    function line(name, v, cls, depth) {
       var tot = 0;
-      var tds = col.map(function (i, j) {
-        var v = i >= 0 && r.values ? r.values[i] : 0; tot += v;
-        return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (v ? money(v) : "") + "</td>";
-      }).join("");
-      var key = /net (operating )?income|net profit|gross profit/i.test(r.name);
-      return "<tr class='" + (r.kind === "total" ? "pl-t" : "pl-l") + (key ? " pl-key" + (tot < 0 ? " neg" : "") : "") + "'><th class='sticky' style='padding-left:" + (14 + r.depth * 14) + "px'>" + esc(r.name) + "</th><td class='st'></td>" + tds + "<td class='tot'>" + (tot ? money(tot) : "") + "</td></tr>";
-    }).join("");
-    var head = "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
-      "<thead><tr><th class='sticky'>QuickBooks</th><th class='st'></th>" + keys.map(function (k, i) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + M3[i] + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
-    return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss ' + y + '</h2></div><p class="muted rep-sub">From QuickBooks' +
-      (p.company_name ? " (" + esc(p.company_name) + ")" : "") + ", the whole business: every income and expense account. Updated every hour" +
-      (p.fetched_at ? ", last " + esc(new Date(p.fetched_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") + ".</p>" +
-      '<div class="sheet-wrap"><table class="sheet pl">' + head + "<tbody>" + body + "</tbody></table></div></section>";
+      var tds = v.map(function (x, j) { tot += x; return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join("");
+      return "<tr class='" + (cls || "pl-l") + "'><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + tds + "<td class='tot'>" + (tot ? money(tot) : "") + "</td></tr>";
+    }
+    function head(name, depth) {
+      return "<tr class='pl-h'><th class='sticky' style='padding-left:" + (14 + (depth || 0) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>";
+    }
+    var key = function (name, v) { var t = v.reduce(function (a, b) { return a + b; }, 0); return line(name, v, "pl-t pl-key" + (t < 0 ? " neg" : ""), 0); };
+
+    var body = head("Income (Tracker)") +
+      line("Retainers and one-time work", inc.revenue) + line("Pay per lead", inc.ppl) + line("Ad spend prepaid by clients", inc.prepaid) +
+      line("Video shoots collected", inc.shoot) + line("Card fees clients covered", inc.cardfee) +
+      line("Total income", income, "pl-t", 0) +
+      head("Cost of delivery (Tracker)") +
+      line("Client ad spend (Meta)", adSpend) + line("Stripe fees", fees) +
+      line("Total cost of delivery", add(adSpend, fees), "pl-t", 0) +
+      key("Gross profit", gross) +
+      head("Expenses (QuickBooks)") +
+      (hasQbo ? expRows.map(function (r) { return r.head ? head(r.name, r.depth) : line(r.name, r.v, "pl-l", r.depth); }).join("") : "") +
+      line("Total expenses", expTotal, "pl-t", 0) +
+      key("Net profit", net) +
+      (hasQbo ? line("For reference: QuickBooks total income", qboIncome, "pl-ref", 0) : "");
+
+    var thead = "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
+      "<thead><tr><th class='sticky'>Profit &amp; loss</th><th class='st'></th>" + keys.map(function (k, i) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + M3[i] + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+    var note = hasQbo ? "Income, client ad spend and Stripe fees come from Tracker. All other expenses come from QuickBooks" + (p.company_name ? " (" + esc(p.company_name) + ")" : "") +
+        ", updated every hour" + (p.fetched_at ? ", last " + esc(new Date(p.fetched_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") +
+        ". QuickBooks' own client ad spend line is left out." + (fees.some(Boolean) ? "" : " Stripe fees show once the Stripe key can read balances.")
+      : (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") + 'Connect QuickBooks in <a href="#settings">Settings</a> to add your other expenses.';
+    return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss ' + y + '</h2></div><p class="muted rep-sub">' + note + "</p>" +
+      '<div class="sheet-wrap"><table class="sheet pl">' + thead + "<tbody>" + body + "</tbody></table></div></section>";
   }
 
   async function qboSettings(el) {
