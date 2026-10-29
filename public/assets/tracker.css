@@ -391,7 +391,7 @@ a.cl-row:hover{background:var(--card)}
 #adLeadsView{padding:18px clamp(16px,3vw,32px) 60px;max-width:1200px;margin:0 auto}
 .al .cl-head{flex-wrap:wrap}
 .al-table,.al-leads{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.al-row{display:grid;grid-template-columns:minmax(0,1.6fr) 90px 110px 120px 170px;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid var(--line);text-decoration:none;color:var(--text);font-variant-numeric:tabular-nums}
+.al-row{display:grid;grid-template-columns:minmax(0,1.6fr) 100px 120px 120px 170px;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid var(--line);text-decoration:none;color:var(--text);font-variant-numeric:tabular-nums}
 .al-row:first-child{border-top:0}
 a.al-row:hover{background:var(--card)}
 .al-th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
@@ -420,8 +420,9 @@ a.al-row:hover{background:var(--card)}
 .al-fields{grid-template-columns:minmax(120px,240px) 1fr}
 .al-fields dd{text-align:left;white-space:pre-wrap}
 @media (max-width:800px){
-  .al-row{grid-template-columns:minmax(0,1fr) auto}
-  .al-row>:nth-child(n+3){display:none}
+  .al-row{grid-template-columns:minmax(0,1fr) 64px 76px}
+  .al-row>:nth-child(n+4){display:none}
+  .al-sp{text-align:right}
   .al-th{display:none}
   .al-sum{grid-template-columns:minmax(0,1fr) 20px}
   .al-when{grid-column:1;order:2;font-size:12px}
@@ -433,3 +434,13 @@ a.al-row:hover{background:var(--card)}
   .al-fields dt{margin-top:6px}
 }
 .al-n.zero{color:var(--faint);font-weight:500}
+.al-n small{display:block;font-size:11px;font-weight:500;color:var(--faint)}
+.al-range{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.al-dates{display:flex;gap:10px;flex-wrap:wrap}
+.al-dates label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.al-dates .inp{padding:6px 10px;width:auto}
+.al-dates-m{margin:14px 0 10px}
+.al-quick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.al-check{display:flex;align-items:center;gap:8px;font-size:14px;margin:8px 0}
+.al-check input{width:16px;height:16px;accent-color:var(--gold)}
+@media (max-width:800px){.al-range{align-items:stretch;width:100%}.al-range .seg{overflow-x:auto}}
