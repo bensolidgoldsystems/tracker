@@ -248,7 +248,7 @@
           '<div class="who">' + esc(l.contact_name || l.email || "") + "</div>" +
           '<div class="pbar"><i style="width:' + cs.pct + '%"></i></div>' +
           '<div class="row"><span>Checklist ' + cs.done + "/" + cs.total + " · " + (l.lead_files || []).length + " files</span>" +
-          (l.intake_status === "uploading" ? '<span class="badge warn">Uploading</span>' : l.source === "manual" ? '<span class="badge">Manual</span>' : "<span>" + fmtDate(l.created_at) + "</span>") + "</div>";
+          (l.intake_status === "uploading" ? '<span class="badge warn">Filling out form</span>' : l.source === "manual" ? '<span class="badge">Manual</span>' : "<span>" + fmtDate(l.created_at) + "</span>") + "</div>";
         a.addEventListener("dragstart", function (e) { e.dataTransfer.setData("text/plain", l.id); a.classList.add("dragging"); });
         a.addEventListener("dragend", function () { a.classList.remove("dragging"); });
         col.appendChild(a);
@@ -504,7 +504,7 @@
     var html = '<a class="back" href="#leads">← Website leads</a>' +
       '<div class="lead-head"><div><h1>' + esc(l.business_name || "Untitled lead") + "</h1>" +
       '<div class="sub">' + [esc(l.contact_name), gmail, tel, "Submitted " + fmtDate(l.created_at)].filter(Boolean).join(" · ") +
-      (l.intake_status === "uploading" ? ' · <span class="badge warn">Upload unfinished</span>' : "") +
+      (l.intake_status === "uploading" ? ' · <span class="badge warn">Form not finished yet</span>' : "") +
       (l.client_id ? ' · <a class="badge gold" href="#client/' + esc(l.client_id) + '">Existing client</a>' : "") + "</div></div>" +
       '<div class="lead-actions">' +
       '<button class="btn gold" id="exportBtn">Export build kit (.zip)</button>' +
