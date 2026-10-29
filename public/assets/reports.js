@@ -649,7 +649,7 @@
     var p = d.pnl;
     if (!p || !p.rows || !p.rows.length) {
       return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' +
-        (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". " : "") +
+        (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") +
         'Connect QuickBooks in <a href="#settings">Settings</a> to see income, expenses and profit from your books here.</p></section>';
     }
     var col = keys.map(function (k) { return p.months.indexOf(k.slice(0, 7)); });
@@ -685,7 +685,7 @@
       (st.connected ?
         '<p>Connected' + (st.company ? " to <b>" + esc(st.company) + "</b>" : "") + (st.connected_by ? " by " + esc(st.connected_by) : "") + ". Tracker reads your Profit &amp; Loss every hour; it never changes anything in QuickBooks.</p>" +
         (st.last ? '<p class="muted">Last update ' + esc(new Date(st.last.fetched_at).toLocaleString("en-US")) + (st.last.ok === false ? " · problem: " + esc(st.last.message) : "") + "</p>" : "") +
-        '<div style="display:flex;gap:8px"><button class="btn sm" id="qboSync">Update now</button><button class="btn sm ghost" id="qboOff">Disconnect</button></div>'
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' + (st.last && st.last.ok === false ? '<button class="btn sm gold" id="qboGo">Reconnect QuickBooks</button>' : "") + '<button class="btn sm" id="qboSync">Update now</button><button class="btn sm ghost" id="qboOff">Disconnect</button></div>'
       : st.configured ?
         '<p class="muted">Show income, expenses and profit from your books on the Reports page. Tracker only reads from QuickBooks.</p><button class="btn gold" id="qboGo">Connect QuickBooks</button>'
       : '<p class="muted">To connect, add <code>QBO_CLIENT_ID</code> and <code>QBO_CLIENT_SECRET</code> (from your Intuit developer app) in Supabase → Edge Functions → Secrets, then come back here.</p>') +
