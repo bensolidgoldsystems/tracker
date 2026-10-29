@@ -6,6 +6,9 @@
 //     Charges carry Meta's transaction ID, the same one the billing report CSV shows, so nothing is
 //     counted twice; only charges after the last imported CSV charge for that account are added.
 //   - the account's current balance (spend not yet charged to the card) and which card it bills.
+//   - individual leads from instant forms on every Page the system user can see (needs the Page
+//     assigned with Leads access and the token to include leads_retrieval, pages_show_list,
+//     pages_read_engagement, pages_manage_ads) -> public.meta_leads, matched to clients by ad account.
 // Called daily by pg_cron (x-cron-secret header) and by "Sync now" in Tracker Settings
 // (signed-in team member whose sign-in passed email 2FA).
 // Secrets: META_ACCESS_TOKEN (system user token, ads_read), optional META_API_VERSION.
@@ -133,6 +136,73 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
   return (data || []).length;
 }
 
+// Pull a lead's contact basics out of its form answers.
+function contactOf(fields: any[]) {
+  const get = (re: RegExp) => { const f = (fields || []).find((x) => re.test(String(x.name || ""))); return f && f.values ? String(f.values[0] || "") : ""; };
+  const full = get(/^full[_ ]?name$/i) || [get(/^first[_ ]?name$/i), get(/^last[_ ]?name$/i)].filter(Boolean).join(" ");
+  return { name: full, email: get(/e-?mail/i), phone: get(/phone/i) };
+}
+
+// Leads from instant forms on every Page we can read, matched to clients by ad account
+// (or by Page for leads with no ad, e.g. organic or test leads).
+async function syncLeads(token: string, acctClient: Record<string, string>) {
+  let added = 0;
+  const problems: string[] = [];
+  let pages: any[] = [];
+  try { pages = await graphAll("/me/accounts", { fields: "id,name,access_token", limit: "100" }, token); }
+  catch (e) { return { added, problems: ["pages: " + (e as Error).message] }; }
+  const adAcct: Record<string, string> = {};
+  for (const pg of pages) {
+    const ptoken = pg.access_token || token;
+    try {
+      const { data: known } = await db.from("meta_pages").select("client_id").eq("page_id", pg.id).maybeSingle();
+      let pageClient: string | null = (known && known.client_id) || null;
+      const forms = await graphAll("/" + pg.id + "/leadgen_forms", { fields: "id,name,status", limit: "100" }, ptoken);
+      for (const f of forms) {
+        const { data: last } = await db.from("meta_leads").select("created_time").eq("form_id", f.id).order("created_time", { ascending: false }).limit(1);
+        const params: Record<string, string> = { fields: "id,created_time,ad_id,ad_name,adset_name,campaign_name,form_id,field_data,is_organic,platform", limit: "500" };
+        if (last && last.length) {
+          const since = Math.floor(new Date(last[0].created_time).getTime() / 1000) - 86400;
+          params.filtering = JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: since }]);
+        }
+        const leads = await graphAll("/" + f.id + "/leads", params, ptoken);
+        if (!leads.length) continue;
+        const rows = [];
+        for (const l of leads) {
+          let acct = "";
+          if (l.ad_id) {
+            if (adAcct[l.ad_id] === undefined) {
+              try { const ad = await graph("/" + l.ad_id, { fields: "account_id" }, token); adAcct[l.ad_id] = String(ad.account_id || ""); }
+              catch (_) { adAcct[l.ad_id] = ""; }
+            }
+            acct = adAcct[l.ad_id];
+          }
+          const client = (acct && acctClient[acct]) || pageClient || null;
+          if (!pageClient && acct && acctClient[acct]) pageClient = acctClient[acct];
+          const c = contactOf(l.field_data);
+          rows.push({
+            id: String(l.id), created_time: l.created_time, client_id: client, ad_account_id: acct, page_id: String(pg.id),
+            form_id: String(f.id), form_name: f.name || "", ad_id: String(l.ad_id || ""), ad_name: l.ad_name || "",
+            adset_name: l.adset_name || "", campaign_name: l.campaign_name || "", is_organic: !!l.is_organic,
+            platform: l.platform || "", name: c.name, email: c.email, phone: c.phone, fields: l.field_data || [],
+            synced_at: new Date().toISOString(),
+          });
+        }
+        // Keep any client someone set by hand in Tracker: only fill client_id on new leads.
+        const { data: ins, error } = await db.from("meta_leads").upsert(rows, { onConflict: "id", ignoreDuplicates: true }).select("id");
+        if (error) throw error;
+        added += (ins || []).length;
+      }
+      await db.from("meta_pages").upsert({ page_id: String(pg.id), name: pg.name || "", client_id: pageClient, forms: forms.length, last_synced_at: new Date().toISOString(), last_error: "" }, { onConflict: "page_id" });
+    } catch (e) {
+      const msg = String((e as Error).message || e).slice(0, 400);
+      problems.push((pg.name || pg.id) + ": " + msg);
+      await db.from("meta_pages").upsert({ page_id: String(pg.id), name: pg.name || "", last_error: msg }, { onConflict: "page_id" });
+    }
+  }
+  return { added, problems };
+}
+
 async function runSync(trigger: string, sinceOverride?: string) {
   const token = Deno.env.get("META_ACCESS_TOKEN") || "";
   if (!token) return { ok: false, configured: false, message: "Meta isn't connected yet (META_ACCESS_TOKEN not set)." };
@@ -151,9 +221,10 @@ async function runSync(trigger: string, sinceOverride?: string) {
     }
     const { data: linked } = await db.from("clients").select("id,ad_spend_mode,meta_ad_account_ids");
     const payer: Record<string, string> = {};   // ad account -> client id, when SGS pays Meta
+    const acctClient: Record<string, string> = {};   // ad account -> client id
     for (const c of linked || []) for (const id of c.meta_ad_account_ids || []) {
       if (!/^\d+$/.test(id)) continue;
-      ids.add(id);
+      ids.add(id); acctClient[id] = c.id;
       if (/^sgs_/.test(c.ad_spend_mode || "")) payer[id] = c.id;
     }
     let charges = 0;
@@ -204,7 +275,9 @@ async function runSync(trigger: string, sinceOverride?: string) {
         await db.from("meta_ad_accounts").upsert({ ad_account_id: id, last_error: msg.slice(0, 500) }, { onConflict: "ad_account_id" });
       }
     }
-    const message = (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
+    // 3. Individual leads from instant forms.
+    const lr = await syncLeads(token, acctClient);
+    const message = (lr.added ? lr.added + " new lead(s). " : "") + (lr.problems.length ? "Leads: " + lr.problems.join(" | ").slice(0, 400) + ". " : "") + (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
     await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok: !problems.length, accounts, rows, message }).eq("id", run?.id);
     return { ok: !problems.length, configured: true, accounts, rows, message };
   } catch (e) {

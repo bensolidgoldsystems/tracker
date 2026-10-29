@@ -284,13 +284,14 @@
      #clients ... Clients (clients.js)   #client/<id>  #partner/<id>
      #leads ... Website Leads board            #lead/<id>
      #admin  #settings */
-  var VIEWS = ["overviewView", "clientsView", "reportsView", "pplView", "boardView", "leadView", "adminView", "settingsView"];
+  var VIEWS = ["overviewView", "clientsView", "reportsView", "pplView", "adLeadsView", "boardView", "leadView", "adminView", "settingsView"];
   function show(id) {
     VIEWS.forEach(function (v) { $(v).classList.toggle("hidden", v !== id); });
     $("tabOverview").classList.toggle("on", id === "overviewView");
     $("tabClients").classList.toggle("on", id === "clientsView");
     $("tabReports").classList.toggle("on", id === "reportsView");
     $("tabPpl").classList.toggle("on", id === "pplView");
+    $("tabAdLeads").classList.toggle("on", id === "adLeadsView");
     $("tabLeads").classList.toggle("on", id === "boardView" || id === "leadView");
   }
   function route() {
@@ -301,6 +302,7 @@
     else if (h === "#admin" && myRole === "admin") { show("adminView"); openAdmin(); }
     else if (m) { show("leadView"); openLead(m[1]); }
     else if (h === "#leads") { show("boardView"); renderBoard(); }
+    else if (/^#adleads/.test(h)) { show("adLeadsView"); window.SGSAdLeads.route(h, $("adLeadsView")); }
     else if (/^#ppl/.test(h)) { show("pplView"); window.SGSPpl.route(h, $("pplView")); }
     else if (/^#reports/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
     else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
@@ -924,6 +926,7 @@
   window.SGSClients.init(shared);
   window.SGSReports.init(shared);
   window.SGSPpl.init(shared);
+  window.SGSAdLeads.init(shared);
 
   /* ---------- start ---------- */
   sb.auth.onAuthStateChange(function (event) {
