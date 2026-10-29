@@ -280,7 +280,7 @@
   });
 
   /* ---------- routing ----------
-     #  or #overview ... Overview (reports.js)   #reports[/<year>] ... Reports (reports.js)
+     #  or #overview ... Overview (reports.js)   #finance ... Finance (reports.js)
      #clients ... Clients (clients.js)   #client/<id>  #partner/<id>
      #leads ... Website Leads board            #lead/<id>
      #admin  #settings */
@@ -306,7 +306,7 @@
     else if (/^#sgs/.test(h)) { show("sgsView"); window.SGSAdLeads.route(h, $("sgsView")); }
     else if (/^#adleads/.test(h)) { show("adLeadsView"); window.SGSAdLeads.route(h, $("adLeadsView")); }
     else if (/^#ppl/.test(h)) { show("pplView"); window.SGSPpl.route(h, $("pplView")); }
-    else if (/^#reports/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
+    else if (/^#(reports|finance)/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
     else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
     else { show("overviewView"); window.SGSReports.overview($("overviewView")); }
     window.scrollTo(0, 0);

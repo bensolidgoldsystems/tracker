@@ -5,7 +5,7 @@
    Daily spend in public.meta_daily is only used for lead counts.
    tracker.js calls SGSReports.init(helpers), then:
      SGSReports.overview(el)        #overview (home)
-     SGSReports.reports(el, hash)   #reports, #reports/2026
+     SGSReports.reports(el, hash)   #finance (also #reports), Finance tab
      SGSReports.metaSettings(el)    Settings page
      SGSReports.clientPanel(el, c)  money panel on a client page */
 (function () {
@@ -164,7 +164,7 @@
   }
   function asOf(at) { return at ? "As of " + new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : ""; }
   /* Live balances: ask Meta for each account's balance now and update every "not yet charged"
-     amount on screen in place. Runs when Overview / Reports / a client page opens, then every
+     amount on screen in place. Runs when Overview / Finance / a client page opens, then every
      5 minutes while one of them is on screen. */
   var liveAt = 0, liveTimer = null, liveCache = null;
   function applyLive() {
@@ -227,7 +227,7 @@
 
     el.innerHTML = '<div class="cl-wrap ov">' +
       '<div class="cl-head"><div><h1>Overview</h1><p class="muted">' + esc(monthLong(key)) + " so far</p></div>" +
-      '<div class="cl-actions"><a class="btn" href="#reports">Open reports</a></div></div>' +
+      '<div class="cl-actions"><a class="btn" href="#finance">Open Finance</a></div></div>' +
       '<div class="stats">' +
         kpi("Revenue this month", money(t.income), compare(t.income, tp.income)) +
         kpi("Ad spend on our cards", money(t.spend), "Prepaid by clients " + money(t.reimb)) +
@@ -267,7 +267,7 @@
       if (!weFront(c) && !hasAny(c.id, ["ad_spend", "synced_spend"], key.slice(0, 4))) { return; }
       var b = adBalance(c.id, key);
       if (b < -25) {
-        items.push({ pri: 1, html: '<b>' + esc(c.business_name) + "</b> owes " + money(-b, { cents: true }) + " in ad spend we fronted" + ' <a href="#reports">Reports</a>' });
+        items.push({ pri: 1, html: '<b>' + esc(c.business_name) + "</b> owes " + money(-b, { cents: true }) + " in ad spend we fronted" + ' <a href="#finance">Finance</a>' });
       }
     });
     // Active monthly clients with nothing recorded this month (after the 5th).
@@ -275,7 +275,7 @@
       d.clients.forEach(function (c) {
         if (statusOf(c) !== "active" || !monthlyServices(c.id).length) { return; }
         if (!val(c.id, key, "revenue")) {
-          items.push({ pri: 2, html: "No payment recorded for <b>" + esc(c.business_name) + "</b> in " + esc(monthLong(key)) + ' <a href="#reports">Add it</a>' });
+          items.push({ pri: 2, html: "No payment recorded for <b>" + esc(c.business_name) + "</b> in " + esc(monthLong(key)) + ' <a href="#finance">Add it</a>' });
         }
       });
     }
@@ -322,34 +322,69 @@
   /* ======================================================================
      REPORTS (the bookkeeping sheet)
      ====================================================================== */
-  var view = { year: new Date().getFullYear() };
+  var view = { range: "ytd", from: "", to: "" };
+  var RANGES = [["month", "This month"], ["lastmonth", "Last month"], ["quarter", "This quarter"], ["lastquarter", "Last quarter"],
+    ["ytd", "Year to date"], ["12m", "Last 12 months"], ["lastyear", "Last year"], ["custom", "Custom"]];
+  // Months (YYYY-MM) in the selected Finance range.
+  function rangeKeys() {
+    var now = new Date(), y = now.getFullYear(), m = now.getMonth(), q = Math.floor(m / 3) * 3;
+    var span = function (y1, m1, y2, m2) { var out = []; for (var yy = y1, mm = m1; yy < y2 || (yy === y2 && mm <= m2); mm++) { if (mm > 11) { mm = 0; yy++; } if (yy > y2 || (yy === y2 && mm > m2)) { break; } out.push(monthKey(yy, mm)); } return out; };
+    var pm = m ? m - 1 : 11, py = m ? y : y - 1;
+    switch (view.range) {
+      case "month": return [monthKey(y, m)];
+      case "lastmonth": return [monthKey(py, pm)];
+      case "quarter": return span(y, q, y, q + 2);
+      case "lastquarter": return q ? span(y, q - 3, y, q - 1) : span(y - 1, 9, y - 1, 11);
+      case "12m": return m === 11 ? span(y, 0, y, 11) : span(y - 1, m + 1, y, m);
+      case "lastyear": return span(y - 1, 0, y - 1, 11);
+      case "custom":
+        var f = view.from || monthKey(y, 0), t = view.to || monthKey(y, m);
+        if (f > t) { var x = f; f = t; t = x; }
+        return span(+f.slice(0, 4), +f.slice(5) - 1, +t.slice(0, 4), +t.slice(5) - 1);
+      default: return span(y, 0, y, m);
+    }
+  }
+  function rangeLabel(keys) {
+    var r = RANGES.filter(function (x) { return x[0] === view.range; })[0];
+    var name = function (k) { return M3[+k.slice(5) - 1] + " " + k.slice(0, 4); };
+    var span = keys.length === 1 ? name(keys[0]) : name(keys[0]) + " – " + name(keys[keys.length - 1]);
+    return (r && view.range !== "custom" ? r[1] + " · " : "") + span;
+  }
+  function colLabel(keys) {
+    var multi = keys.length && keys[0].slice(0, 4) !== keys[keys.length - 1].slice(0, 4);
+    return function (k) { return M3[+k.slice(5) - 1] + (multi ? " ’" + k.slice(2, 4) : ""); };
+  }
+  function hasAnyIn(cid, cats, keys) {
+    var months = d.cell[cid] || {};
+    return keys.some(function (k) { return months[k] && cats.some(function (cat) { return months[k][cat]; }); });
+  }
   async function reports(el, hash) {
-    var m = String(hash || "").match(/^#reports\/(\d{4})/);
-    if (m) { view.year = +m[1]; }
+    var m = String(hash || "").match(/^#(?:reports|finance)\/(\d{4})/);
+    if (m) { view.range = "custom"; view.from = m[1] + "-01"; view.to = m[1] + "-12"; }
     el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
     try { await load(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
     drawReports(el);
     liveBalances();
   }
   function drawReports(el) {
-    var y = view.year, keys = M3.map(function (_, i) { return monthKey(y, i); });
+    var keys = rangeKeys(), lbl = colLabel(keys), y = rangeLabel(keys);
     var curKey = monthKey(new Date().getFullYear(), new Date().getMonth());
     var future = function (k) { return k > curKey; };
     var clients = d.clients.slice();
 
     // Which clients appear in each section.
     var revRows = clients.filter(function (c) {
-      return hasAny(c.id, ["revenue"], y) || (statusOf(c) !== "churned" && !perLeadServices(c.id).length && (monthlyServices(c.id).length || statusOf(c) === "onboarding"));
+      return hasAnyIn(c.id, ["revenue"], keys) || (statusOf(c) !== "churned" && !perLeadServices(c.id).length && (monthlyServices(c.id).length || statusOf(c) === "onboarding"));
     });
-    var pplRows = clients.filter(function (c) { return hasAny(c.id, ["per_lead"], y) || (statusOf(c) !== "churned" && perLeadServices(c.id).length); });
-    var adRows = clients.filter(function (c) { return hasAny(c.id, ["ad_spend", "synced_spend", "ad_reimbursement"], y) || (weFront(c) && statusOf(c) !== "churned"); });
-    var payRows = clients.filter(function (c) { return hasAny(c.id, ["partner_payout", "video_shoot"], y); });
-    var feeRows = clients.filter(function (c) { return hasAny(c.id, ["card_fee"], y); });
+    var pplRows = clients.filter(function (c) { return hasAnyIn(c.id, ["per_lead"], keys) || (statusOf(c) !== "churned" && perLeadServices(c.id).length); });
+    var adRows = clients.filter(function (c) { return hasAnyIn(c.id, ["ad_spend", "synced_spend", "ad_reimbursement"], keys) || (weFront(c) && statusOf(c) !== "churned"); });
+    var payRows = clients.filter(function (c) { return hasAnyIn(c.id, ["partner_payout", "video_shoot"], keys); });
+    var feeRows = clients.filter(function (c) { return hasAnyIn(c.id, ["card_fee"], keys); });
 
     function head(first) {
       return "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
         "<thead><tr><th class='sticky'>" + esc(first) + "</th><th class='st'>Status</th>" +
-        keys.map(function (k, i) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + M3[i] + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+        keys.map(function (k) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + lbl(k) + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
     }
     function row(c, cat, opts) {
       opts = opts || {};
@@ -411,19 +446,22 @@
         return "<td class='" + (b < 0 ? "neg" : "pos") + (k === curKey ? " now" : "") + "'>" + money(b, { cents: true }) + "</td>";
       }).join("") + "<td class='tot'></td></tr>";
       return "<tbody class='grp'>" +
-        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + (unbilled(c) ? " · <b class='unb' data-unb='" + c.id + "' data-unb-label title='" + esc(asOf(unbilled(c).at)) + "'>At Meta: " + esc(unbilledText(unbilled(c))) + "</b>" : "") + "</td></tr>" +
+        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='" + (keys.length + 1) + "' class='mode'>" + esc(modeLabel(c)) + (unbilled(c) ? " · <b class='unb' data-unb='" + c.id + "' data-unb-label title='" + esc(asOf(unbilled(c).at)) + "'>At Meta: " + esc(unbilledText(unbilled(c))) + "</b>" : "") + "</td></tr>" +
         (c.ad_spend_mode === "sgs_included" ? row(c, "spend", { label: "Spent (our cost)" }) :
           row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Prepaid" }) + bal) + "</tbody>";
     }).join("");
 
     var partnerName = (d.partners[0] || {}).name || "partner";
     el.innerHTML = '<div class="cl-wrap rep">' +
-      '<div class="cl-head"><div><h1>Reports</h1><p class="muted">Click any month to see or add amounts.</p></div>' +
-      '<div class="cl-actions year"><a class="btn sm ghost" href="#reports/' + (y - 1) + '" aria-label="Previous year">←</a><b>' + y + '</b><a class="btn sm ghost" href="#reports/' + (y + 1) + '" aria-label="Next year">→</a></div></div>' +
+      '<div class="cl-head"><div><h1>Finance</h1><p class="muted">' + esc(y) + ". Click any month to see or add amounts.</p></div></div>" +
+      '<div class="fin-range"><div class="seg" role="group" aria-label="Time frame">' + RANGES.map(function (r) {
+        return '<button class="seg-b' + (view.range === r[0] ? " on" : "") + '" data-frange="' + r[0] + '">' + r[1] + "</button>";
+      }).join("") + "</div>" +
+      (view.range === "custom" ? '<div class="al-dates"><label>From <input class="inp" type="month" id="finFrom" value="' + keys[0] + '"></label><label>To <input class="inp" type="month" id="finTo" value="' + keys[keys.length - 1] + '"></label></div>' : "") + "</div>" +
       '<nav class="rep-nav"><a href="#" data-jump="secPnl">Profit &amp; loss</a><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
-      pnlSection(y, keys, curKey) +
-      section("secSum", "Summary " + y, "", summary) +
-      section("secRev", "Revenue " + y, "Retainers, websites and other one-time work, by the month it was billed.",
+      pnlSection(y, keys, curKey, lbl) +
+      section("secSum", "Summary", "", summary) +
+      section("secRev", "Revenue", "Retainers, websites and other one-time work, by the month it was billed.",
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
       section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
         head("Client") + "<tbody>" + pplRows.map(function (c) { return row(c, "per_lead"); }).join("") + "</tbody>" + totalRow("Total pay per lead", sumCat(pplRows, "per_lead")), "per_lead") +
@@ -445,6 +483,16 @@
       td.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); td.onclick(); } };
     });
     el.querySelectorAll("[data-add]").forEach(function (b) { b.onclick = function () { addAmount(b.dataset.add, el); }; });
+    el.querySelectorAll("[data-frange]").forEach(function (b) {
+      b.onclick = function () {
+        if (b.dataset.frange === "custom" && view.range !== "custom") { var ks = rangeKeys(); view.from = ks[0]; view.to = ks[ks.length - 1]; }
+        view.range = b.dataset.frange; drawReports(el); liveBalances();
+      };
+    });
+    ["finFrom", "finTo"].forEach(function (id) {
+      var i = $(id);
+      if (i) { i.onchange = function () { if (i.value) { view[id === "finFrom" ? "from" : "to"] = i.value; drawReports(el); liveBalances(); } }; }
+    });
     el.querySelectorAll("[data-jump]").forEach(function (a) {
       a.onclick = function (e) { e.preventDefault(); var s = $(a.dataset.jump); if (s) { s.scrollIntoView({ behavior: "smooth", block: "start" }); } };
     });
@@ -529,10 +577,11 @@
     T.modal("<h2>Add " + esc(CAT[cat].toLowerCase()) + "</h2>" +
       "<div class='g3'><div class='fld'><label for='aaClient'>Client</label><select class='inp' id='aaClient'>" +
       opts.map(function (c) { return "<option value='" + c.id + "'>" + esc(c.business_name) + (statusOf(c) === "churned" ? " (churned)" : "") + "</option>"; }).join("") + "</select></div>" +
-      "<div class='fld'><label for='aaMonth'>Month</label><select class='inp' id='aaMonth'>" + M3.map(function (m, i) {
-        var k = monthKey(view.year, i);
-        return "<option value='" + k + "'" + (view.year === now.getFullYear() && i === now.getMonth() ? " selected" : "") + ">" + m + " " + view.year + "</option>";
-      }).join("") + "</select></div>" +
+      "<div class='fld'><label for='aaMonth'>Month</label><select class='inp' id='aaMonth'>" + (function () {
+        var ks = rangeKeys(), cur = monthKey(now.getFullYear(), now.getMonth());
+        if (ks.indexOf(cur) === -1) { ks = ks.concat([cur]); }
+        return ks.map(function (k) { return "<option value='" + k + "'" + (k === cur ? " selected" : "") + ">" + M3[+k.slice(5) - 1] + " " + k.slice(0, 4) + "</option>"; }).join("");
+      })() + "</select></div>" +
       "<div class='fld'><label for='aaAmt'>Amount ($)</label><input class='inp' id='aaAmt' type='number' step='0.01' inputmode='decimal'></div></div>" +
       "<div class='fld' style='margin-top:12px'><label for='aaNote'>Note <span class='opt'>optional</span></label><input class='inp' id='aaNote'></div>" +
       "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Add</button></div>");
@@ -573,7 +622,7 @@
       unbilled(c) ? ["Waiting to charge at Meta", '<span data-unb="' + c.id + '">' + esc(unbilledText(unbilled(c))) + "</span>"] : null,
       tot.payout ? ["Paid to partner", money(tot.payout)] : null
     ].filter(Boolean);
-    el.innerHTML = '<div class="panel"><h2>Money <a class="btn sm" href="#reports">Reports</a></h2><dl class="kv">' +
+    el.innerHTML = '<div class="panel"><h2>Money <a class="btn sm" href="#finance">Finance</a></h2><dl class="kv">' +
       lines.map(function (l) { return "<dt>" + esc(l[0]) + "</dt><dd>" + (String(l[1]).indexOf("<") === 0 ? l[1] : esc(l[1])) + "</dd>"; }).join("") + "</dl></div>";
     if (unbilled(c)) { liveBalances(); }
   }
@@ -649,7 +698,7 @@
      Meta + what's entered by hand); every other expense comes from QuickBooks. QuickBooks' own
      client ad spend line is left out because Tracker's Meta charges are the source of truth. */
   var AD_SPEND_QBO = /meta ad spend|client ad spend/i;
-  function pnlSection(y, keys, curKey) {
+  function pnlSection(y, keys, curKey, lbl) {
     var p = d.pnl;
     var hasQbo = !!(p && p.rows && p.rows.length);
     var sum = function (cat) { return keys.map(function (k) { return d.entries.reduce(function (s, e) { return s + (e.category === cat && ym(e.month) === k ? Number(e.amount) : 0); }, 0); }); };
@@ -702,12 +751,12 @@
       (hasQbo ? line("For reference: QuickBooks total income", qboIncome, "pl-ref", 0) : "");
 
     var thead = "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
-      "<thead><tr><th class='sticky'>Profit &amp; loss</th><th class='st'></th>" + keys.map(function (k, i) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + M3[i] + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+      "<thead><tr><th class='sticky'>Profit &amp; loss</th><th class='st'></th>" + keys.map(function (k) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + lbl(k) + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
     var note = hasQbo ? "Income, client ad spend and Stripe fees come from Tracker. All other expenses come from QuickBooks" + (p.company_name ? " (" + esc(p.company_name) + ")" : "") +
         ", updated every hour" + (p.fetched_at ? ", last " + esc(new Date(p.fetched_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") +
         ". QuickBooks' own client ad spend line is left out." + (fees.some(Boolean) ? "" : " Stripe fees show once the Stripe key can read balances.")
       : (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") + 'Connect QuickBooks in <a href="#settings">Settings</a> to add your other expenses.';
-    return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss ' + y + '</h2></div><p class="muted rep-sub">' + note + "</p>" +
+    return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' + note + "</p>" +
       '<div class="sheet-wrap"><table class="sheet pl">' + thead + "<tbody>" + body + "</tbody></table></div></section>";
   }
 
@@ -725,7 +774,7 @@
         (st.last ? '<p class="muted">Last update ' + esc(new Date(st.last.fetched_at).toLocaleString("en-US")) + (st.last.ok === false ? " · problem: " + esc(st.last.message) : "") + "</p>" : "") +
         '<div style="display:flex;gap:8px;flex-wrap:wrap">' + (st.last && st.last.ok === false ? '<button class="btn sm gold" id="qboGo">Reconnect QuickBooks</button>' : "") + '<button class="btn sm" id="qboSync">Update now</button><button class="btn sm ghost" id="qboOff">Disconnect</button></div>'
       : st.configured ?
-        '<p class="muted">Show income, expenses and profit from your books on the Reports page. Tracker only reads from QuickBooks.</p><button class="btn gold" id="qboGo">Connect QuickBooks</button>'
+        '<p class="muted">Show income, expenses and profit from your books on the Finance page. Tracker only reads from QuickBooks.</p><button class="btn gold" id="qboGo">Connect QuickBooks</button>'
       : '<p class="muted">To connect, add <code>QBO_CLIENT_ID</code> and <code>QBO_CLIENT_SECRET</code> (from your Intuit developer app) in Supabase → Edge Functions → Secrets, then come back here.</p>') +
       "</div>";
     if ($("qboGo")) {

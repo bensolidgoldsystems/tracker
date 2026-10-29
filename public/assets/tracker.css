@@ -481,3 +481,7 @@ a.al-row:hover{background:var(--card)}
 .sheet.pl tr.pl-key th,.sheet.pl tr.pl-key td{color:var(--ok);font-weight:700}
 .sheet.pl tr.pl-key.neg th,.sheet.pl tr.pl-key.neg td{color:var(--bad)}
 .sheet.pl tr.pl-ref th,.sheet.pl tr.pl-ref td{color:var(--faint);font-size:12px;font-style:italic}
+/* Finance time frame */
+.fin-range{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:4px 0 14px}
+.fin-range .seg{flex-wrap:wrap}
+@media (max-width:800px){.fin-range .seg{overflow-x:auto;flex-wrap:nowrap;max-width:100%}}
