@@ -112,7 +112,7 @@
         }
         return '<div class="ppl-row' + (b ? " done" : n ? " due" : "") + '"><span class="ppl-day">' + dayLabel(dd) + '</span><span class="ppl-n">' + (n || "<span class='muted'>0</span>") + "</span>" + right + "</div>";
       }).join("") + "</div>" +
-      '<p class="muted" style="font-size:12px;margin-top:10px">Meta counts leads in the ad account\'s time zone and updates every morning (last refresh ' +
+      '<p class="muted" style="font-size:12px;margin-top:10px">Meta counts leads in the ad account\'s time zone and updates every hour (last refresh ' +
       esc(data.lastSync ? new Date(data.lastSync.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never") +
       "). Charges show on Reports under Pay per lead.</p></div>";
 

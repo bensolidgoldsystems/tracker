@@ -11,7 +11,7 @@ revoke all on function public.meta_sync_secret() from public, anon, authenticate
 grant execute on function public.meta_sync_secret() to service_role;
 
 -- 6:20am New York time (10:20 UTC; 11:20 in winter is fine too)
-select cron.schedule('meta-sync-daily', '20 10 * * *', $$
+select cron.schedule('meta-sync-daily', '20 * * * *', $$
   select net.http_post(
     url := 'https://hipuhixrfabjnbtwrldn.supabase.co/functions/v1/meta-sync',
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', public.meta_sync_secret()),

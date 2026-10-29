@@ -1,5 +1,5 @@
 /* Solid Gold Systems Tracker - Client Leads tab (#adleads, #adleads/<client id>, #adleads/unmatched)
-   Every lead from Meta instant forms (public.meta_leads, synced each morning by meta-sync),
+   Every lead from Meta instant forms (public.meta_leads, synced hourly by meta-sync),
    grouped by client, with the lead's details and form answers. Ad spend comes from the daily
    numbers in public.meta_daily. Each client can be sent a branded PDF report for any dates. */
 (function () {
@@ -160,7 +160,7 @@
   }
   function syncNote() {
     var r = d.run;
-    return '<p class="muted al-sync">Leads come from Meta lead forms and GHL (website forms and funnels) and refresh every morning' +
+    return '<p class="muted al-sync">Leads come from Meta lead forms and GHL (website forms and funnels) and refresh automatically (Meta hourly, GHL every 15 minutes)' +
       (r ? " (last refresh " + esc(new Date(r.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) + ")" : "") +
       '. <button class="linkbtn" id="alSync">Refresh now</button></p>';
   }

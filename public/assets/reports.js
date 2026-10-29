@@ -1,7 +1,7 @@
 /* Solid Gold Systems Tracker - Money: Overview, Reports (the bookkeeping sheet), Meta.
    Every amount lives in public.money_entries (one row per amount in a month).
    Ad spend = actual Meta charges on our cards: imported billing reports (source meta_csv) and,
-   after that, charges pulled from Meta's activity log every morning (source meta_api).
+   after that, charges pulled from Meta's activity log every hour (source meta_api).
    Daily spend in public.meta_daily is only used for lead counts.
    tracker.js calls SGSReports.init(helpers), then:
      SGSReports.overview(el)        #overview (home)
@@ -253,7 +253,7 @@
     }
     if (leadsNew) { items.push({ pri: 2, html: leadsNew + " new website lead" + (leadsNew === 1 ? "" : "s") + ' waiting <a href="#leads">Open</a>' }); }
     var run = d.runs[0];
-    if (!run) { items.push({ pri: 3, html: 'Meta isn\'t connected yet. Ad spend and leads will update daily once it is. <a href="#settings">Settings</a>' }); }
+    if (!run) { items.push({ pri: 3, html: 'Meta isn\'t connected yet. Ad spend and leads will update every hour once it is. <a href="#settings">Settings</a>' }); }
     else if (run.ok === false) { items.push({ pri: 1, html: "Last Meta sync had a problem: " + esc(run.message || "unknown error") + ' <a href="#settings">Settings</a>' }); }
     if (!items.length) { return '<li class="ok">All caught up.</li>'; }
     return items.sort(function (a, b) { return a.pri - b.pri; }).map(function (i) { return '<li class="p' + i.pri + '">' + i.html + "</li>"; }).join("");
@@ -534,8 +534,8 @@
     });
     el.innerHTML = '<div class="panel"><h2>Meta ads <span class="badge ' + (configured ? "ok" : "warn") + '">' + (configured ? "Connected" : "Not connected") + "</span></h2>" +
       "<p class='muted' style='font-size:14px;margin-bottom:12px'>" +
-      (configured ? "Daily spend and leads sync every morning for every ad account our Meta system user can see." :
-        "Once the Meta access token is added in Supabase, daily spend and leads sync every morning. Until then, ad spend comes from the billing reports already imported.") + "</p>" +
+      (configured ? "Spend, leads and card charges sync every hour for every ad account our Meta system user can see." :
+        "Once the Meta access token is added in Supabase, spend and leads sync every hour. Until then, ad spend comes from the billing reports already imported.") + "</p>" +
       (run ? "<p style='font-size:14px;margin-bottom:12px'>Last sync: " + esc(new Date(run.started_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) + " · " +
         (run.ok ? "<span style='color:var(--ok)'>OK</span>, " + run.accounts + " accounts, " + run.rows + " days updated" : "<span style='color:var(--bad)'>" + esc(run.message || "failed") + "</span>") + "</p>" : "") +
       "<div class='addfiles' style='margin-bottom:14px'><button class='btn gold' id='metaSync'" + (configured ? "" : " disabled") + ">Sync now</button></div>" +
