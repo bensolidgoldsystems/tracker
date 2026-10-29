@@ -350,6 +350,24 @@ Deno.serve(async (req) => {
     const billing = ev.filter((e) => e.event_type === "ad_account_billing_charge");
     return json(req, 200, { events: ev.length, types: [...new Set(ev.map((e) => e.event_type))], billing: billing.slice(0, 40) });
   }
+  // Live balances (spend Meta hasn't charged to the card yet) for every account linked to a client.
+  if (body.action === "balances") {
+    const t = Deno.env.get("META_ACCESS_TOKEN") || "";
+    if (!t) return json(req, 200, { configured: false });
+    const { data: cl } = await db.from("clients").select("meta_ad_account_ids");
+    const ids = [...new Set((cl || []).flatMap((c: any) => c.meta_ad_account_ids || []).filter((x: string) => /^\d+$/.test(x)))];
+    const at = new Date().toISOString();
+    const balances: Record<string, unknown> = {};
+    await Promise.all(ids.map(async (id) => {
+      try {
+        const a = await graph("/act_" + id, { fields: "balance,funding_source_details" }, t);
+        const b = { balance: a.balance != null ? Number(a.balance) / 100 : null, funding_source: String((a.funding_source_details && a.funding_source_details.display_string) || "") };
+        balances[id] = b;
+        await db.from("meta_ad_accounts").upsert({ ad_account_id: id, ...b, balance_at: at }, { onConflict: "ad_account_id" });
+      } catch (_) { /* keep the last known balance */ }
+    }));
+    return json(req, 200, { ok: true, at, balances });
+  }
   if (body.action === "status") {
     return json(req, 200, { configured: !!Deno.env.get("META_ACCESS_TOKEN") });
   }

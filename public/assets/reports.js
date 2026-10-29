@@ -81,6 +81,7 @@
     ]);
     d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null };
     index();
+    applyLive();
     return d;
   }
 
@@ -155,6 +156,49 @@
   function unbilledText(u) {
     return money(u.amount, { cents: true }) + " not yet charged" + (u.cards.length ? " (" + u.cards.join(", ") + ")" : "");
   }
+  function unbSum() {
+    var sum = 0, n = 0;
+    d.clients.forEach(function (c) { if (weFront(c)) { var u = unbilled(c); if (u) { sum += u.amount; n++; } } });
+    return { sum: sum, n: n };
+  }
+  function asOf(at) { return at ? "As of " + new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : ""; }
+  /* Live balances: ask Meta for each account's balance now and update every "not yet charged"
+     amount on screen in place. Runs when Overview / Reports / a client page opens, then every
+     5 minutes while one of them is on screen. */
+  var liveAt = 0, liveTimer = null, liveCache = null;
+  function applyLive() {
+    if (!liveCache || !d) { return; }
+    d.accounts.forEach(function (a) {
+      var b = liveCache.balances[a.ad_account_id];
+      if (b && (!a.balance_at || a.balance_at <= liveCache.at)) { a.balance = b.balance; a.funding_source = b.funding_source || a.funding_source; a.balance_at = liveCache.at; }
+    });
+  }
+  async function liveBalances(force) {
+    if (!force && Date.now() - liveAt < 60000) { paintUnb(); return; }
+    liveAt = Date.now();
+    try {
+      var r = await T.fn("meta-sync", { action: "balances" });
+      if (r && r.balances) { liveCache = { at: r.at, balances: r.balances }; }
+    } catch (e) { /* keep the last synced numbers */ }
+    paintUnb();
+    if (!liveTimer) {
+      liveTimer = setInterval(function () {
+        if (document.visibilityState === "visible" && document.querySelector("[data-unb]")) { liveBalances(true); }
+      }, 300000);
+    }
+  }
+  function paintUnb() {
+    if (!d) { return; }
+    applyLive();
+    document.querySelectorAll("[data-unb]").forEach(function (n) {
+      var id = n.getAttribute("data-unb");
+      if (id === "all") { var s = unbSum(); n.textContent = money(s.sum, { cents: true }); return; }
+      var c = byId(d.clients, id), u = c && unbilled(c);
+      if (!u) { return; }
+      n.textContent = (n.hasAttribute("data-unb-label") ? "At Meta: " : "") + unbilledText(u);
+      n.title = asOf(u.at);
+    });
+  }
   function clientName(cid) { var c = byId(d.clients, cid); return c ? c.business_name : "No client"; }
 
   /* ======================================================================
@@ -188,9 +232,8 @@
         kpi("Ad spend on our cards", money(t.spend), "Prepaid by clients " + money(t.reimb)) +
         kpi("Partner payouts", money(t.payout), "") +
         (function () {
-          var sum = 0, n = 0;
-          d.clients.forEach(function (c) { if (weFront(c)) { var u = unbilled(c); if (u) { sum += u.amount; n++; } } });
-          return n ? kpi("At Meta, not yet charged", money(sum, { cents: true }), "Will hit our cards next") : "";
+          var s = unbSum();
+          return s.n ? kpi("At Meta, not yet charged", money(s.sum, { cents: true }), "Live from Meta · will hit our cards next").replace("<b>", '<b data-unb="all">') : "";
         })() +
         kpi("Net this month", money(t.net), "Revenue + prepaid − spend − payouts", t.net < 0 ? "bad" : "") +
         kpi("Revenue " + y + " to date", money(ytd), "") +
@@ -204,6 +247,7 @@
         }).join("") + "</div></div>" +
         metaStatusPanel() +
       "</aside></div></div>";
+    liveBalances();
   }
   function kpi(label, value, sub, cls) {
     return '<div class="stat' + (cls ? " " + cls : "") + '"><span>' + esc(label) + "</span><b>" + esc(value) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + "</div>";
@@ -284,6 +328,7 @@
     el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
     try { await load(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
     drawReports(el);
+    liveBalances();
   }
   function drawReports(el) {
     var y = view.year, keys = M3.map(function (_, i) { return monthKey(y, i); });
@@ -365,7 +410,7 @@
         return "<td class='" + (b < 0 ? "neg" : "pos") + (k === curKey ? " now" : "") + "'>" + money(b, { cents: true }) + "</td>";
       }).join("") + "<td class='tot'></td></tr>";
       return "<tbody class='grp'>" +
-        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + (unbilled(c) ? " · <b class='unb'>At Meta: " + esc(unbilledText(unbilled(c))) + "</b>" : "") + "</td></tr>" +
+        "<tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13' class='mode'>" + esc(modeLabel(c)) + (unbilled(c) ? " · <b class='unb' data-unb='" + c.id + "' data-unb-label title='" + esc(asOf(unbilled(c).at)) + "'>At Meta: " + esc(unbilledText(unbilled(c))) + "</b>" : "") + "</td></tr>" +
         (c.ad_spend_mode === "sgs_included" ? row(c, "spend", { label: "Spent (our cost)" }) :
           row(c, "spend", { label: "Spent" }) + row(c, "ad_reimbursement", { label: "Prepaid" }) + bal) + "</tbody>";
     }).join("");
@@ -523,11 +568,12 @@
       tot.spend || weFront(c) ? ["Ad spend on our cards", money(tot.spend, { cents: true })] : null,
       tot.reimb || weFront(c) ? ["Ad spend prepaid", money(tot.reimb, { cents: true })] : null,
       (tot.spend || tot.reimb) && c.ad_spend_mode !== "sgs_included" ? ["Ad balance", '<b class="' + (bal < 0 ? "neg" : "pos") + '">' + money(bal, { cents: true }) + "</b>" + (bal < 0 ? " owed to us" : "")] : null,
-      unbilled(c) ? ["Waiting to charge at Meta", unbilledText(unbilled(c))] : null,
+      unbilled(c) ? ["Waiting to charge at Meta", '<span data-unb="' + c.id + '">' + esc(unbilledText(unbilled(c))) + "</span>"] : null,
       tot.payout ? ["Paid to partner", money(tot.payout)] : null
     ].filter(Boolean);
     el.innerHTML = '<div class="panel"><h2>Money <a class="btn sm" href="#reports">Reports</a></h2><dl class="kv">' +
       lines.map(function (l) { return "<dt>" + esc(l[0]) + "</dt><dd>" + (String(l[1]).indexOf("<") === 0 ? l[1] : esc(l[1])) + "</dd>"; }).join("") + "</dl></div>";
+    if (unbilled(c)) { liveBalances(); }
   }
 
   /* ======================================================================
