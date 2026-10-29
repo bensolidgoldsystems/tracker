@@ -19,6 +19,8 @@ const ALLOWED_ORIGINS = ["https://tracker.solidgoldsystems.com", "https://solidg
 const GRAPH = "https://graph.facebook.com/" + (Deno.env.get("META_API_VERSION") || "v23.0");
 const FIRST_DAY = "2026-01-01";     // first sync goes back to here
 const REFRESH_DAYS = 3;             // Meta adjusts recent days; re-pull them each run
+// SGS's own ad account(s): also pulled per ad (campaign / ad set / ad) for the SGS Leads tab.
+const OWN_ACCOUNTS = (Deno.env.get("META_OWN_ACCOUNTS") || "1399902944415343").split(",").map((x) => x.trim()).filter(Boolean);
 
 const url = Deno.env.get("SUPABASE_URL")!;
 function serviceKey(): string {
@@ -134,6 +136,36 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
   const { data, error } = await db.from("money_entries").upsert(rows, { onConflict: "external_ref", ignoreDuplicates: true }).select("id");
   if (error) throw error;
   return (data || []).length;
+}
+
+// Daily numbers per ad -> public.meta_ad_daily.
+async function syncAdDaily(acct: string, token: string, sinceOverride?: string): Promise<number> {
+  let since = sinceOverride || FIRST_DAY;
+  if (!sinceOverride) {
+    const { data: last } = await db.from("meta_ad_daily").select("day").eq("ad_account_id", acct).order("day", { ascending: false }).limit(1);
+    if (last && last.length) since = addDays(last[0].day, -REFRESH_DAYS);
+  }
+  const until = ymd(new Date());
+  let n = 0;
+  for (let start = since; start <= until; start = addDays(start, 90)) {
+    const end = addDays(start, 89) < until ? addDays(start, 89) : until;
+    const rows = await graphAll("/act_" + acct + "/insights", {
+      level: "ad", time_increment: "1",
+      fields: "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,inline_link_clicks,actions",
+      time_range: JSON.stringify({ since: start, until: end }), limit: "500",
+    }, token);
+    if (!rows.length) continue;
+    const up = rows.map((r) => ({
+      ad_id: String(r.ad_id), day: r.date_start, ad_account_id: acct,
+      campaign_id: String(r.campaign_id || ""), campaign_name: r.campaign_name || "", adset_id: String(r.adset_id || ""), adset_name: r.adset_name || "",
+      ad_name: r.ad_name || "", spend: Number(r.spend) || 0, impressions: Number(r.impressions) || 0, clicks: Number(r.clicks) || 0,
+      link_clicks: Number(r.inline_link_clicks) || 0, leads: leadCount(r.actions), synced_at: new Date().toISOString(),
+    }));
+    const { error } = await db.from("meta_ad_daily").upsert(up, { onConflict: "ad_id,day" });
+    if (error) throw error;
+    n += up.length;
+  }
+  return n;
 }
 
 // Pull a lead's contact basics out of its form answers.
@@ -268,6 +300,10 @@ async function runSync(trigger: string, sinceOverride?: string) {
           }, { onConflict: "ad_account_id" });
         } catch (e) { problems.push(id + " (balance): " + String((e as Error).message || e)); }
         if (payer[id]) charges += await syncCharges(id, payer[id], token, card);
+        if (OWN_ACCOUNTS.includes(id)) {
+          try { rows += await syncAdDaily(id, token, sinceOverride); }
+          catch (e) { problems.push(id + " (ads): " + String((e as Error).message || e)); }
+        }
         await db.from("meta_ad_accounts").upsert({ ad_account_id: id, last_synced_at: new Date().toISOString(), last_error: "" }, { onConflict: "ad_account_id" });
       } catch (e) {
         const msg = String((e as Error).message || e);

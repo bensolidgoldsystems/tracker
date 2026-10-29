@@ -388,7 +388,7 @@ a.cl-row:hover{background:var(--card)}
 }
 
 /* ---------- ad leads ---------- */
-#adLeadsView{padding:18px clamp(16px,3vw,32px) 60px;max-width:1200px;margin:0 auto}
+#adLeadsView,#sgsView{padding:18px clamp(16px,3vw,32px) 60px;max-width:1200px;margin:0 auto}
 .al .cl-head{flex-wrap:wrap}
 .al-table,.al-leads{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .al-row{display:grid;grid-template-columns:minmax(0,1.6fr) 100px 120px 120px 170px;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid var(--line);text-decoration:none;color:var(--text);font-variant-numeric:tabular-nums}
@@ -444,3 +444,28 @@ a.al-row:hover{background:var(--card)}
 .al-check{display:flex;align-items:center;gap:8px;font-size:14px;margin:8px 0}
 .al-check input{width:16px;height:16px;accent-color:var(--gold)}
 @media (max-width:800px){.al-range{align-items:stretch;width:100%}.al-range .seg{overflow-x:auto}}
+/* SGS leads */
+.al-sec{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:26px 0 10px}
+.al-sec h2{font-size:18px;margin:0 8px 0 0}
+.seg.sm .seg-b{padding:5px 10px;font-size:12.5px}
+.sg-row{grid-template-columns:minmax(0,2fr) 100px 70px 110px 80px 70px}
+.sg-best{color:var(--ok);font-weight:700}
+.sg-chart{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px 6px;margin-top:14px}
+.sg-chart svg{width:100%;height:190px;display:block}
+.sg-chart text{fill:var(--faint);font-size:11px}
+.sg-bar{fill:var(--gold)}
+.sg-line{fill:none;stroke:var(--text);stroke-width:2;opacity:.75}
+.sg-axis{stroke:var(--line)}
+.sg-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:6px}
+.sg-legend i{display:inline-block;vertical-align:middle;margin-right:6px}
+.sg-k-bar{width:10px;height:10px;background:var(--gold);border-radius:2px}
+.sg-k-line{width:14px;height:2px;background:var(--text);opacity:.75}
+.sg-legend .muted{margin-left:auto}
+@media (max-width:800px){
+  .sg-row{grid-template-columns:minmax(0,1fr) 70px 44px 70px}
+  .sg-row>:nth-child(4){display:block}
+  .sg-row>:nth-child(n+5){display:none}
+  .sg-row>span{font-size:13px}
+  .sg-chart svg{height:150px}
+}
+.sg-row .al-name small{text-transform:none}

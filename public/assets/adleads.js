@@ -5,9 +5,13 @@
 (function () {
   "use strict";
   var T = null;
-  var RANGES = [["month", "This month"], ["30", "Last 30 days"], ["year", "This year"], ["all", "All time"], ["custom", "Custom"]];
+  var RANGES = [["7", "Last 7 days"], ["month", "This month"], ["30", "Last 30 days"], ["year", "This year"], ["all", "All time"], ["custom", "Custom"]];
   var view = { range: "month", from: "", to: "", q: "" };
   var d = null, el = null;
+  var SGS = (window.SGS_CONFIG && window.SGS_CONFIG.sgsMeta) || { adAccounts: [], pages: [] };
+  var sgsView = { by: "campaign", sort: "spend" };
+  // SGS's own leads (not tied to a client) live on the SGS Leads tab, not under "not matched".
+  function isSgs(l) { return !l.client_id && (SGS.pages.indexOf(l.page_id) !== -1 || SGS.adAccounts.indexOf(l.ad_account_id) !== -1); }
 
   function esc(s) { return T.esc(s); }
   function $(id) { return document.getElementById(id); }
@@ -35,6 +39,7 @@
   function windowDays() {
     var now = new Date();
     if (view.range === "month") { return [ymd(new Date(now.getFullYear(), now.getMonth(), 1)), today()]; }
+    if (view.range === "7") { return [ymd(new Date(Date.now() - 6 * 864e5)), today()]; }
     if (view.range === "30") { return [ymd(new Date(Date.now() - 29 * 864e5)), today()]; }
     if (view.range === "year") { return [now.getFullYear() + "-01-01", today()]; }
     if (view.range === "custom") {
@@ -52,22 +57,23 @@
   }
   function prettyField(name) { return String(name || "").replace(/_/g, " ").replace(/\?$/, "").replace(/^\w/, function (c) { return c.toUpperCase(); }); }
 
-  async function load() {
+  async function load(withAds) {
     var res = await Promise.all([
       q(T.sb.from("clients").select("id,business_name,status,meta_ad_account_ids").order("business_name")),
       all(function () { return T.sb.from("meta_leads").select("*").order("created_time", { ascending: false }).order("id"); }),
       all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_pages").select("*")),
-      q(T.sb.from("meta_sync_runs").select("started_at,ok,message").order("started_at", { ascending: false }).limit(1))
+      q(T.sb.from("meta_sync_runs").select("started_at,ok,message").order("started_at", { ascending: false }).limit(1)),
+      withAds ? all(function () { return T.sb.from("meta_ad_daily").select("*").in("ad_account_id", SGS.adAccounts).order("day").order("ad_id"); }).catch(function () { return []; }) : Promise.resolve([])
     ]);
-    d = { clients: res[0], leads: res[1], daily: res[2], pages: res[3], run: res[4][0] || null };
+    d = { clients: res[0], leads: res[1], daily: res[2], pages: res[3], run: res[4][0] || null, ads: res[5] };
   }
 
   /* Leads, spend and Meta's own lead count for one client (or unmatched leads) in window w. */
   function statsFor(c, w) {
     w = w || windowDays();
     var accts = c ? (c.meta_ad_account_ids || []) : [];
-    var leads = d.leads.filter(function (l) { return c ? l.client_id === c.id : !l.client_id; });
+    var leads = d.leads.filter(function (l) { return c ? l.client_id === c.id : !l.client_id && !isSgs(l); });
     var r = leads.filter(function (l) { return between(localDay(l.created_time), w); });
     var spend = 0, metaCount = 0, byDay = {};
     d.daily.forEach(function (x) {
@@ -84,8 +90,12 @@
 
   async function route(hash, container) {
     el = container;
+    // Ad Leads and SGS Leads share element ids; keep only the one on screen in the page.
+    ["adLeadsView", "sgsView"].forEach(function (id) { var v = $(id); if (v && v !== container) { v.innerHTML = ""; } });
     el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
-    try { await load(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+    var sgs = /^#sgs/.test(hash);
+    try { await load(sgs); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+    if (sgs) { drawSgs(); return; }
     var m = String(hash).match(/^#adleads\/([0-9a-f-]{36}|unmatched)/);
     if (m) { drawClient(m[1]); } else { drawList(); }
   }
@@ -478,6 +488,120 @@
     }
     doc.setProperties({ title: pdfText(c.business_name) + " Lead Report " + w[0] + " to " + w[1], author: "Solid Gold Systems", creator: "Solid Gold Systems Tracker" });
     save(doc.output("blob"), c.business_name.replace(/[^\w]+/g, "-").replace(/^-|-$/g, "") + "-Lead-Report-" + w[0] + "-to-" + w[1] + ".pdf");
+  }
+
+  /* ---------- SGS's own leads and ad spend (#sgs) ---------- */
+  function drawSgs() {
+    var w = windowDays();
+    var leads = d.leads.filter(function (l) { return isSgs(l) && between(localDay(l.created_time), w); });
+    var spend = 0, metaLeads = 0, byDay = {};
+    d.daily.forEach(function (x) {
+      if (SGS.adAccounts.indexOf(x.ad_account_id) !== -1 && between(x.day, w)) {
+        spend += Number(x.spend || 0); metaLeads += Number(x.leads || 0);
+        var b = byDay[x.day] || (byDay[x.day] = { spend: 0, leads: 0 }); b.spend += Number(x.spend || 0); b.leads += Number(x.leads || 0);
+      }
+    });
+    leads.forEach(function (l) { var k = localDay(l.created_time); var b = byDay[k] || (byDay[k] = { spend: 0, leads: 0, forms: 0 }); b.forms = (b.forms || 0) + 1; });
+    var ads = (d.ads || []).filter(function (x) { return between(x.day, w); });
+    var imp = 0, clicks = 0;
+    ads.forEach(function (x) { imp += Number(x.impressions || 0); clicks += Number(x.link_clicks || x.clicks || 0); });
+    var total = Math.max(leads.length, metaLeads);
+
+    // Breakdown by campaign / ad set / ad: spend and clicks from Meta's ad-level numbers,
+    // leads = Meta's count or the form leads we have, whichever is higher.
+    var keyOf = { campaign: function (x) { return x.campaign_name || "(no campaign)"; }, adset: function (x) { return x.adset_name || "(no ad set)"; }, ad: function (x) { return x.ad_name || "(no ad)"; } };
+    var parentOf = { campaign: function () { return ""; }, adset: function (x) { return x.campaign_name || ""; }, ad: function (x) { return [x.campaign_name, x.adset_name].filter(Boolean).join(" › "); } };
+    var by = sgsView.by, rows = {};
+    function row(k, parent) { return rows[k] || (rows[k] = { name: k, parent: parent, spend: 0, imp: 0, clicks: 0, meta: 0, forms: 0 }); }
+    ads.forEach(function (x) {
+      var r = row(keyOf[by](x), parentOf[by](x));
+      r.spend += Number(x.spend || 0); r.imp += Number(x.impressions || 0); r.clicks += Number(x.link_clicks || x.clicks || 0); r.meta += Number(x.leads || 0);
+    });
+    leads.forEach(function (l) {
+      var x = { campaign_name: l.campaign_name, adset_name: l.adset_name, ad_name: l.ad_name };
+      if (!l.ad_id && l.is_organic) { x = { campaign_name: "Organic", adset_name: "Organic", ad_name: "Organic" }; }
+      row(keyOf[by](x), x.campaign_name === "Organic" ? "" : parentOf[by](x)).forms++;
+    });
+    var list = Object.keys(rows).map(function (k) { var r = rows[k]; r.leads = Math.max(r.meta, r.forms); r.cpl = r.leads && r.spend ? r.spend / r.leads : null; return r; })
+      .filter(function (r) { return r.spend || r.leads; });
+    var sorts = { spend: function (a, b) { return b.spend - a.spend; }, leads: function (a, b) { return b.leads - a.leads || b.spend - a.spend; },
+      cpl: function (a, b) { return (a.cpl == null ? 1e9 : a.cpl) - (b.cpl == null ? 1e9 : b.cpl); } };
+    list.sort(sorts[sgsView.sort] || sorts.spend);
+    var best = list.filter(function (r) { return r.cpl != null && r.leads >= 2; }).sort(sorts.cpl)[0];
+
+    var qv = view.q.toLowerCase();
+    var shown = leads.filter(function (l) {
+      return !qv || [l.name, l.email, l.phone, l.campaign_name, l.adset_name, l.ad_name, l.form_name].join(" ").toLowerCase().indexOf(qv) !== -1 || JSON.stringify(l.fields || []).toLowerCase().indexOf(qv) !== -1;
+    });
+    var seg = function (key, opts, cur) {
+      return '<div class="seg sm" role="group">' + opts.map(function (o) { return '<button class="seg-b' + (cur === o[0] ? " on" : "") + '" data-' + key + '="' + o[0] + '">' + o[1] + "</button>"; }).join("") + "</div>";
+    };
+
+    el.innerHTML = '<div class="cl-wrap al">' +
+      '<div class="cl-head"><div><h1>SGS Leads</h1><p class="muted">Solid Gold Systems\' own Meta ads. ' + esc(windowLabel()) + ".</p></div>" + rangeBar() + "</div>" +
+      '<div class="stats">' +
+        stat("Leads", total, leads.length + " from lead forms" + (metaLeads > leads.length ? ", rest from website" : "")) +
+        stat("Ad spend", money2(spend), "") +
+        stat("Cost per lead", total && spend ? money2(spend / total) : "—", best ? "Best: " + best.name.slice(0, 40) + " (" + money2(best.cpl) + ")" : "") +
+        stat("Link clicks", clicks.toLocaleString("en-US"), imp ? (100 * clicks / imp).toFixed(2) + "% CTR · " + (clicks ? money2(spend / clicks) + " per click" : "") : "") +
+      "</div>" +
+      sgsChart(w, byDay) +
+      '<div class="al-sec"><h2>What\'s working</h2>' + seg("by", [["campaign", "Campaigns"], ["adset", "Ad sets"], ["ad", "Ads"]], by) +
+        '<span class="spacer"></span>' + seg("sort", [["spend", "Most spend"], ["leads", "Most leads"], ["cpl", "Cheapest lead"]], sgsView.sort) + "</div>" +
+      '<div class="al-table sg-table"><div class="al-row sg-row al-th"><span>' + { campaign: "Campaign", adset: "Ad set", ad: "Ad" }[by] + "</span><span>Spend</span><span>Leads</span><span>Cost per lead</span><span>Clicks</span><span>CTR</span></div>" +
+        (list.length ? list.map(function (r) {
+          return '<div class="al-row sg-row"><span class="al-name"><b>' + esc(r.name) + "</b>" + (r.parent ? "<small>" + esc(r.parent) + "</small>" : "") + "</span>" +
+            "<span>" + money2(r.spend) + '</span><span class="al-n' + (r.leads ? "" : " zero") + '">' + r.leads + "</span>" +
+            "<span" + (best && r === best ? ' class="sg-best"' : "") + ">" + (r.cpl != null ? money2(r.cpl) : "—") + "</span>" +
+            "<span>" + (r.clicks ? r.clicks.toLocaleString("en-US") : "—") + "</span><span>" + (r.imp ? (100 * r.clicks / r.imp).toFixed(2) + "%" : "—") + "</span></div>";
+        }).join("") : '<p class="muted" style="padding:16px">' + (d.ads && d.ads.length ? "No ad activity in these dates." : "Ad-level numbers start with the next Meta refresh.") + "</p>") +
+      "</div>" +
+      '<div class="al-sec"><h2>Leads (' + leads.length + ")</h2></div>" +
+      '<div class="board-bar al-bar"><input class="inp search" id="alQ" type="search" placeholder="Search name, phone, email, campaign, ad..." value="' + esc(view.q) + '" aria-label="Search leads">' +
+        '<span class="spacer"></span><button class="btn sm" id="alCsv"' + (shown.length ? "" : " disabled") + ">Download CSV</button></div>" +
+      '<div class="al-leads">' + (shown.length ? shown.map(function (l) { return leadRow(l, false); }).join("") :
+        '<p class="muted" style="padding:18px">' + (leads.length ? "No leads match." : "No form leads in these dates.") + "</p>") + "</div>" +
+      syncNote() + "</div>";
+
+    wireRange(drawSgs);
+    wireSync("#sgs");
+    el.querySelectorAll("[data-by]").forEach(function (b) { b.onclick = function () { sgsView.by = b.dataset.by; drawSgs(); }; });
+    el.querySelectorAll("[data-sort]").forEach(function (b) { b.onclick = function () { sgsView.sort = b.dataset.sort; drawSgs(); }; });
+    $("alQ").oninput = function (e) { view.q = e.target.value; var pos = e.target.selectionStart; drawSgs(); var inp = $("alQ"); inp.focus(); inp.setSelectionRange(pos, pos); };
+    el.querySelectorAll(".al-lead > button.al-sum").forEach(function (b) { b.onclick = function () { b.parentNode.classList.toggle("open"); b.setAttribute("aria-expanded", b.parentNode.classList.contains("open")); }; });
+    $("alCsv").onclick = function () { downloadCsv({ business_name: "SGS" }, shown); };
+  }
+
+  /* Leads per day (bars) with ad spend (line), as inline SVG. */
+  function sgsChart(w, byDay) {
+    var from = w[0] < "1000" ? (Object.keys(byDay).sort()[0] || today()) : w[0], to = w[1] > today() ? today() : w[1];
+    var days = [];
+    for (var t = new Date(from + "T12:00:00"); ymd(t) <= to && days.length < 800; t = new Date(t.getTime() + 864e5)) { days.push(ymd(t)); }
+    var weekly = days.length > 60, pts = [];
+    for (var i = 0; i < days.length; i += weekly ? 7 : 1) {
+      var n = 0, sp = 0;
+      for (var j = i; j < Math.min(days.length, i + (weekly ? 7 : 1)); j++) { var b = byDay[days[j]]; if (b) { n += Math.max(b.leads || 0, b.forms || 0); sp += b.spend || 0; } }
+      pts.push({ day: days[i], n: n, spend: sp });
+    }
+    if (!pts.length) { return ""; }
+    var W = 1000, H = 190, pad = 24, bw = (W - pad) / pts.length;
+    var maxN = Math.max(1, Math.max.apply(null, pts.map(function (p) { return p.n; })));
+    var maxS = Math.max(1, Math.max.apply(null, pts.map(function (p) { return p.spend; })));
+    var bars = pts.map(function (p, i) {
+      var h = (H - 30) * p.n / maxN;
+      return '<rect x="' + (pad + i * bw + bw * 0.18).toFixed(1) + '" y="' + (H - 18 - h).toFixed(1) + '" width="' + (bw * 0.64).toFixed(1) + '" height="' + h.toFixed(1) + '" rx="2" class="sg-bar"><title>' + esc(p.day) + ": " + p.n + " leads, " + money2(p.spend) + "</title></rect>";
+    }).join("");
+    var line = pts.map(function (p, i) { return (i ? "L" : "M") + (pad + i * bw + bw / 2).toFixed(1) + " " + (H - 18 - (H - 34) * p.spend / maxS).toFixed(1); }).join(" ");
+    var every = Math.ceil(pts.length / 10);
+    var labels = pts.map(function (p, i) {
+      if (i % every) { return ""; }
+      var dt = new Date(p.day + "T12:00:00");
+      return '<text x="' + (pad + i * bw + bw / 2).toFixed(1) + '" y="' + (H - 3) + '" text-anchor="middle">' + (dt.getMonth() + 1) + "/" + dt.getDate() + "</text>";
+    }).join("");
+    return '<div class="sg-chart"><div class="sg-legend"><span><i class="sg-k-bar"></i>Leads' + (weekly ? " per week" : " per day") + '</span><span><i class="sg-k-line"></i>Ad spend</span><span class="muted">Peak ' + maxN + " leads · " + money(maxS) + "</span></div>" +
+      '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" role="img" aria-label="Leads and ad spend over time">' +
+      '<line x1="' + pad + '" x2="' + W + '" y1="' + (H - 18) + '" y2="' + (H - 18) + '" class="sg-axis"/>' + bars +
+      '<path d="' + line + '" class="sg-line" vector-effect="non-scaling-stroke"/>' + labels + "</svg></div>";
   }
 
   window.SGSAdLeads = { init: function (h) { T = h; }, route: route };
