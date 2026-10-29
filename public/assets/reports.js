@@ -77,9 +77,10 @@
       all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_ad_accounts").select("*").order("name")),
       q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5)),
-      q(T.sb.from("stripe_sync_runs").select("*").not("finished_at", "is", null).order("started_at", { ascending: false }).limit(1)).catch(function () { return []; })
+      q(T.sb.from("stripe_sync_runs").select("*").not("finished_at", "is", null).order("started_at", { ascending: false }).limit(1)).catch(function () { return []; }),
+      q(T.sb.from("qbo_pnl").select("*").eq("id", 1)).catch(function () { return []; })
     ]);
-    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null };
+    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null };
     index();
     applyLive();
     return d;
@@ -419,7 +420,8 @@
     el.innerHTML = '<div class="cl-wrap rep">' +
       '<div class="cl-head"><div><h1>Reports</h1><p class="muted">Click any month to see or add amounts.</p></div>' +
       '<div class="cl-actions year"><a class="btn sm ghost" href="#reports/' + (y - 1) + '" aria-label="Previous year">←</a><b>' + y + '</b><a class="btn sm ghost" href="#reports/' + (y + 1) + '" aria-label="Next year">→</a></div></div>' +
-      '<nav class="rep-nav"><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
+      '<nav class="rep-nav">' + (d.pnl && d.pnl.rows && d.pnl.rows.length ? '<a href="#" data-jump="secPnl">Profit &amp; loss</a>' : "") + '<a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
+      pnlSection(y, keys, curKey) +
       section("secSum", "Summary " + y, "", summary) +
       section("secRev", "Revenue " + y, "Retainers, websites and other one-time work, by the month it was billed.",
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
@@ -642,8 +644,75 @@
     });
   }
 
+  /* ---------- QuickBooks: Profit & Loss by month ---------- */
+  function pnlSection(y, keys, curKey) {
+    var p = d.pnl;
+    if (!p || !p.rows || !p.rows.length) {
+      return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' +
+        (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". " : "") +
+        'Connect QuickBooks in <a href="#settings">Settings</a> to see income, expenses and profit from your books here.</p></section>';
+    }
+    var col = keys.map(function (k) { return p.months.indexOf(k.slice(0, 7)); });
+    var body = p.rows.map(function (r) {
+      if (r.kind === "header" && !r.values) {
+        return "<tr class='pl-h'><th class='sticky' style='padding-left:" + (14 + r.depth * 14) + "px'>" + esc(r.name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>";
+      }
+      var tot = 0;
+      var tds = col.map(function (i, j) {
+        var v = i >= 0 && r.values ? r.values[i] : 0; tot += v;
+        return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (v ? money(v) : "") + "</td>";
+      }).join("");
+      var key = /net (operating )?income|net profit|gross profit/i.test(r.name);
+      return "<tr class='" + (r.kind === "total" ? "pl-t" : "pl-l") + (key ? " pl-key" + (tot < 0 ? " neg" : "") : "") + "'><th class='sticky' style='padding-left:" + (14 + r.depth * 14) + "px'>" + esc(r.name) + "</th><td class='st'></td>" + tds + "<td class='tot'>" + (tot ? money(tot) : "") + "</td></tr>";
+    }).join("");
+    var head = "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
+      "<thead><tr><th class='sticky'>QuickBooks</th><th class='st'></th>" + keys.map(function (k, i) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + M3[i] + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+    return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss ' + y + '</h2></div><p class="muted rep-sub">From QuickBooks' +
+      (p.company_name ? " (" + esc(p.company_name) + ")" : "") + ", the whole business: every income and expense account. Updated every hour" +
+      (p.fetched_at ? ", last " + esc(new Date(p.fetched_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") + ".</p>" +
+      '<div class="sheet-wrap"><table class="sheet pl">' + head + "<tbody>" + body + "</tbody></table></div></section>";
+  }
+
+  async function qboSettings(el) {
+    if (!el) { return; }
+    el.innerHTML = '<div class="panel"><h2>QuickBooks</h2><p class="muted">Loading...</p></div>';
+    var st = {};
+    try { st = await T.fn("qbo-auth", { action: "status" }); } catch (e) { st = { error: e.message }; }
+    var flag = (location.hash.match(/qbo=(\w+)/) || [])[1];
+    var note = { connected: "QuickBooks is connected.", cancelled: "Connecting was cancelled.", expired: "That sign-in link expired. Try again.", failed: "QuickBooks didn't accept the connection. Check the Client ID and Secret in Supabase and try again." }[flag];
+    el.innerHTML = '<div class="panel"><h2>QuickBooks</h2>' +
+      (note ? '<div class="hintbox">' + esc(note) + "</div>" : "") +
+      (st.connected ?
+        '<p>Connected' + (st.company ? " to <b>" + esc(st.company) + "</b>" : "") + (st.connected_by ? " by " + esc(st.connected_by) : "") + ". Tracker reads your Profit &amp; Loss every hour; it never changes anything in QuickBooks.</p>" +
+        (st.last ? '<p class="muted">Last update ' + esc(new Date(st.last.fetched_at).toLocaleString("en-US")) + (st.last.ok === false ? " · problem: " + esc(st.last.message) : "") + "</p>" : "") +
+        '<div style="display:flex;gap:8px"><button class="btn sm" id="qboSync">Update now</button><button class="btn sm ghost" id="qboOff">Disconnect</button></div>'
+      : st.configured ?
+        '<p class="muted">Show income, expenses and profit from your books on the Reports page. Tracker only reads from QuickBooks.</p><button class="btn gold" id="qboGo">Connect QuickBooks</button>'
+      : '<p class="muted">To connect, add <code>QBO_CLIENT_ID</code> and <code>QBO_CLIENT_SECRET</code> (from your Intuit developer app) in Supabase → Edge Functions → Secrets, then come back here.</p>') +
+      "</div>";
+    if ($("qboGo")) {
+      $("qboGo").onclick = async function () {
+        this.disabled = true;
+        try { var r = await T.fn("qbo-auth", { action: "start" }); if (r.url) { location.href = r.url; } else { T.toast(r.error || "Couldn't start"); this.disabled = false; } }
+        catch (e) { T.fail(e); this.disabled = false; }
+      };
+    }
+    if ($("qboSync")) {
+      $("qboSync").onclick = async function () {
+        this.disabled = true; this.textContent = "Updating...";
+        try { var r = await T.fn("qbo-auth", { action: "sync" }); T.toast(r.ok ? "QuickBooks updated" : (r.message || "Problem updating"), 6000); } catch (e) { T.fail(e); }
+        qboSettings(el);
+      };
+      $("qboOff").onclick = async function () {
+        if (!window.confirm("Disconnect QuickBooks? The Profit & Loss section stops updating.")) { return; }
+        try { await T.fn("qbo-auth", { action: "disconnect" }); } catch (e) { T.fail(e); }
+        qboSettings(el);
+      };
+    }
+  }
+
   window.SGSReports = {
     init: function (helpers) { T = helpers; },
-    overview: overview, reports: reports, metaSettings: metaSettings, clientPanel: clientPanel
+    overview: overview, reports: reports, metaSettings: metaSettings, clientPanel: clientPanel, qboSettings: qboSettings
   };
 })();

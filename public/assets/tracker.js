@@ -299,7 +299,7 @@
     var h = location.hash;
     var m = h.match(/^#lead\/([0-9a-f-]{36})/);
     if (!m) { current = null; }
-    if (h === "#settings") { show("settingsView"); openSettings(); }
+    if (/^#settings/.test(h)) { show("settingsView"); openSettings(); }
     else if (h === "#admin" && myRole === "admin") { show("adminView"); openAdmin(); }
     else if (m) { show("leadView"); openLead(m[1]); }
     else if (h === "#leads") { show("boardView"); renderBoard(); }
@@ -333,7 +333,7 @@
       '<div><button class="btn gold" type="submit" id="pwBtn">Update password</button></div>' +
       '</form><p class="muted" id="pwMsg" style="font-size:13px;margin-top:10px">At least 8 characters.</p></div>' +
       '<div id="settingsExtra"></div>' +
-      '<div id="metaSettings"></div>' +
+      '<div id="qboSettings"></div><div id="metaSettings"></div>' +
       '<div class="panel"><h2>Sign out</h2>' +
       '<p class="muted" style="font-size:14px;margin-bottom:12px">Signing out everywhere ends your Tracker sessions on every computer and phone. You\'ll need your password and a new code to get back in.</p>' +
       '<div class="addfiles"><button class="btn" id="soHere">Sign out of this device</button><button class="btn danger" id="soAll">Sign out everywhere</button></div></div>';
@@ -367,6 +367,7 @@
     $("soHere").addEventListener("click", function () { signOut(); });   // this device only
     window.SGSClients.renderSettings($("settingsExtra"));
     window.SGSReports.metaSettings($("metaSettings"));
+    window.SGSReports.qboSettings($("qboSettings"));
     $("soAll").addEventListener("click", async function () {
       if (!confirm("Sign out of the Tracker on every device?")) { return; }
       try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
