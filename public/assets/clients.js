@@ -80,7 +80,7 @@
   }
   function nextScheduled(clientId) {
     var t = today();
-    var ev = data.events.filter(function (e) { return e.client_id === clientId && e.kind !== "note" && e.event_date > t; })
+    var ev = window.SGSAds.events(data.events, clientId, true).filter(function (e) { return e.event_date > t; })
       .sort(function (a, b) { return a.event_date < b.event_date ? -1 : 1; });
     return ev[0] || null;
   }
@@ -283,7 +283,7 @@
     var live = adsLiveSince(c.id), st = adsState(c.id), nx = nextScheduled(c.id), bc = billCycle(c);
     if (status(c) !== c.status) {   // a scheduled pause/relaunch date has arrived: store it
       c.status = status(c);
-      T.sb.from("clients").update({ status: c.status }).eq("id", c.id).then(function () {});
+      T.sb.from("clients").update({ status: c.status }).eq("id", c.id).then(function (r) { if (r.error) { T.fail(r.error); } });
     }
 
     el.innerHTML = '<div class="cl-wrap">' +
@@ -498,7 +498,7 @@
       q(T.sb.from("client_service_price_history").select("*").eq("client_service_id", x.id).order("changed_at", { ascending: false }).limit(10)).then(function (hist) {
         if (hist.length && histBox.isConnected) {
           histBox.innerHTML = '<h3>Price history</h3><ul class="hist">' + hist.map(function (h) {
-            return "<li>" + esc(dateLong(h.changed_at.slice(0, 10))) + ": " + esc(money(h.old_price)) + " " + esc(BILLING[h.old_billing_type] || "") +
+            return "<li>" + esc(new Date(h.changed_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })) + ": " + esc(money(h.old_price)) + " " + esc(BILLING[h.old_billing_type] || "") +
               " → <b>" + esc(money(h.new_price)) + " " + esc(BILLING[h.new_billing_type] || "") + "</b>" + (h.changed_by ? ' <span class="muted">by ' + esc(h.changed_by) + "</span>" : "") + "</li>";
           }).join("") + "</ul>";
         }
@@ -849,7 +849,10 @@
       if (build) {
         await q(T.sb.from("client_services").insert({ client_id: c.id, service_id: build.id, billing_type: "one_time", price: build.default_price || 0, start_date: today(), status: "active" }));
       }
-      if (lead.stage !== "closed") { await T.sb.from("leads").update({ stage: "closed" }).eq("id", lead.id); }
+      if (lead.stage !== "closed") {
+        var st = await T.sb.from("leads").update({ stage: "closed" }).eq("id", lead.id);
+        if (st.error) { T.fail(st.error); } else { lead.stage = "closed"; }
+      }
       T.toast("Client created");
       location.hash = "client/" + c.id;
     } catch (e) { T.fail(e); }

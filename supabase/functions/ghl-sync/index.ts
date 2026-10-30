@@ -89,6 +89,9 @@ const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9$ ]/g, " ").replace
 async function runSync(full: boolean) {
   const loc = Deno.env.get("GHL_LOCATION_ID") || "";
   if (!loc || !Deno.env.get("GHL_API_KEY")) return { ok: false, configured: false, message: "GHL isn't connected yet." };
+  // A run the platform stopped at its time limit never finished: close it out.
+  await db.from("ghl_sync_runs").update({ finished_at: new Date().toISOString(), ok: false, message: "Timed out" })
+    .is("finished_at", null).lt("started_at", new Date(Date.now() - 15 * 60000).toISOString());
   const { data: run } = await db.from("ghl_sync_runs").insert({}).select("id").single();
   try {
     // Pipelines and stages by id.
@@ -101,7 +104,10 @@ async function runSync(full: boolean) {
 
     // Since when: everything on the first run, then the last RESYNC_DAYS.
     const { count } = await db.from("ghl_contacts").select("id", { count: "exact", head: true });
-    const since = full || !count ? FIRST_DAY : new Date(Date.now() - RESYNC_DAYS * 864e5).toISOString().slice(0, 10);
+    // Once a day (the 3am New York run) re-read everything, so older leads' stages stay current too.
+    const nyHour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }).format(new Date()));
+    const nightly = nyHour === 3 && new Date().getMinutes() < 15;
+    const since = full || nightly || !count ? FIRST_DAY : new Date(Date.now() - RESYNC_DAYS * 864e5).toISOString().slice(0, 10);
 
     // Contacts, newest first, until we pass `since`.
     const contacts: any[] = [];

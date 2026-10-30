@@ -498,7 +498,7 @@
     var next = { lead: r.data, files: f.data || [], urls: {} };
     await signUrls(next);
     if (gen !== openGen) { return; }
-    current = next;
+    current = next; localChecklist = null;
     renderLead();
     window.scrollTo(0, 0);
   }
@@ -630,8 +630,9 @@
     var ins = await sb.from("lead_files").insert({ lead_id: id, kind: "banner", path: path, name: file.name, size: file.size, mime: file.type || "", source: "sgs" });
     if (ins.error) { fail(ins.error); return; }
     if (old.length) {   // one banner per lead: the new one replaces the old
-      await bucket.remove(old.map(function (f) { return f.path; }));
-      await sb.from("lead_files").delete().in("id", old.map(function (f) { return f.id; }));
+      var rm = await bucket.remove(old.map(function (f) { return f.path; }));
+      var del = await sb.from("lead_files").delete().in("id", old.map(function (f) { return f.id; }));
+      if (rm.error || del.error) { fail(rm.error || del.error); }
     }
     var cl = Object.assign({}, current.lead.checklist || {});
     cl.banner = "done";
@@ -684,14 +685,22 @@
     wireBanner();
   }
 
-  var checklistChain = Promise.resolve();
+  // Checklist clicks build on each other locally (a save coming back never undoes a later click)
+  // and are saved one after another.
+  var checklistChain = Promise.resolve(), localChecklist = null;
   async function setChecklist(id, state) {
     var leadId = current.lead.id;
-    var cl = Object.assign({}, current.lead.checklist || {});
-    if (state) { cl[id] = state; } else { delete cl[id]; }
-    current.lead.checklist = cl;            // the next click builds on this one
+    if (!localChecklist || localChecklist.id !== leadId) { localChecklist = { id: leadId, cl: Object.assign({}, current.lead.checklist || {}) }; }
+    var before = Object.assign({}, localChecklist.cl);
+    if (state) { localChecklist.cl[id] = state; } else { delete localChecklist.cl[id]; }
+    var cl = Object.assign({}, localChecklist.cl);
     var ok = await (checklistChain = checklistChain.then(function () { return saveLead({ checklist: cl }, true, leadId); }));
+    if (localChecklist && localChecklist.id === leadId) {
+      if (!ok) { localChecklist.cl = before; }   // save failed: put the box back
+      if (current && current.lead.id === leadId) { current.lead.checklist = Object.assign({}, localChecklist.cl); }
+    }
     if (!current || current.lead.id !== leadId) { return; }
+    ok = true;
     if (ok) {
       var side = document.querySelector(".side");
       var notes = $("mNotes").value;
@@ -856,12 +865,14 @@
       });
       var ok = await saveLead({
         answers: next,
-        business_name: next.business_name || l0.business_name || "",
-        contact_name: next.contact_name || l0.contact_name || "",
-        email: next.contact_email || l0.email || "",
-        phone: next.business_phone || l0.phone || ""
+        // A field shown in the form is saved as typed (clearing it clears it); one the form doesn't
+        // have keeps the lead's own value.
+        business_name: $("e_business_name") ? next.business_name || "" : l0.business_name || "",
+        contact_name: $("e_contact_name") ? next.contact_name || "" : l0.contact_name || "",
+        email: $("e_contact_email") ? next.contact_email || "" : l0.email || "",
+        phone: $("e_business_phone") ? next.business_phone || "" : l0.phone || ""
       }, false, l0.id);
-      if (ok) { closeModal(); renderLead(); }
+      if (ok) { closeModal(); if (current && current.lead.id === l0.id) { renderLead(); } }
     };
   }
 
@@ -926,7 +937,10 @@
     var btn = $("exportBtn"), l = current.lead, files = current.files;
     btn.disabled = true;
     try {
-      var zip = new JSZip(), root = zip.folder("SGS-Build-Kit_" + slug(l.business_name) + "_" + new Date().toISOString().slice(0, 10));
+      if (!window.JSZip) {   // loaded only when a build kit is exported
+        await new Promise(function (ok, bad) { var sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"; sc.onload = ok; sc.onerror = function () { bad(new Error("Couldn't load the zip tool. Check your connection.")); }; document.head.appendChild(sc); });
+      }
+      var zip = new JSZip(), root = zip.folder("SGS-Build-Kit_" + slug(l.business_name) + "_" + (function () { var t = new Date(); return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); })());
       root.file("BRIEF.md", briefMarkdown(l, files));
       root.file("brief.json", JSON.stringify({ lead: l, files: files.map(function (f) { return { kind: f.kind, folder: folderFor(f.kind), name: f.name, size: f.size, mime: f.mime, source: f.source }; }), schema: { sections: S.SECTIONS.map(function (s) { return { id: s.id, title: s.title, fields: s.fields.map(function (f) { return { id: f.id, label: f.label }; }) }; }) } }, null, 2));
       await signUrls();

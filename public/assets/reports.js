@@ -73,7 +73,7 @@
       q(T.sb.from("partners").select("*").order("name")),
       q(T.sb.from("client_services").select("*")),
       q(T.sb.from("services").select("id,name")),
-      q(T.sb.from("ad_events").select("*")),
+      all(function () { return T.sb.from("ad_events").select("*").order("event_date").order("id"); }),
       all(function () { return T.sb.from("money_entries").select("*").order("entry_date", { ascending: true, nullsFirst: true }).order("id"); }),
       all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,leads").gt("leads", 0).order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_ad_accounts").select("*").order("name")),
@@ -613,22 +613,28 @@
       var btn = this;
       var amt = parseFloat($("meAmt").value);
       if (!isFinite(amt) || !amt) { T.toast("Enter an amount"); return; }
+      var date = $("meDate").value || null;
+      // Pay per lead is billed by lead day: without it the Pay per lead tab can't see the day was billed.
+      if (cat === "per_lead" && !date) { T.toast("Pick the day the leads came in"); return; }
       if (btn.disabled) { return; }
       btn.disabled = true;
-      var date = $("meDate").value || null;
       var row = { amount: Math.round(amt * 100) / 100, entry_date: date, note: $("meNote").value.trim() };
+      if (date) { row.month = date.slice(0, 7) + "-01"; }   // a date in another month counts in that month
       try {
         if (editing) {
           await q(T.sb.from("money_entries").update(row).eq("id", editing.id));
         } else {
           var me = await T.sb.auth.getUser();
-          row.client_id = cid; row.category = cat; row.month = key + "-01"; row.source = "manual";
+          row.client_id = cid; row.category = cat; row.month = row.month || key + "-01"; row.source = "manual";
           row.created_by = (me.data && me.data.user && me.data.user.email) || "";
           if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
           await q(T.sb.from("money_entries").insert(row));
         }
-        await load(true); drawReports(el); editCell(cid, key, cat, el); T.toast(editing ? "Saved" : "Added");
-      } catch (e) { btn.disabled = false; T.fail(e); }
+      } catch (e) { btn.disabled = false; T.fail(e); return; }
+      // Saved. If only the refresh fails, don't offer Save again (that would add it twice).
+      T.toast(editing ? "Saved" : "Added");
+      try { await load(true); drawReports(el); editCell(cid, key, cat, el); }
+      catch (e) { T.closeModal(); T.toast("Saved. Refresh the page to see it."); }
     };
   }
   function addAmount(cat, el) {
@@ -646,24 +652,29 @@
         return ks.map(function (k) { return "<option value='" + k + "'" + (k === cur ? " selected" : "") + ">" + M3[+k.slice(5) - 1] + " " + k.slice(0, 4) + "</option>"; }).join("");
       })() + "</select></div>" +
       "<div class='fld'><label for='aaAmt'>Amount ($)</label><input class='inp' id='aaAmt' type='number' step='0.01' inputmode='decimal'></div></div>" +
-      "<div class='fld' style='margin-top:12px'><label for='aaNote'>Note <span class='opt'>optional</span></label><input class='inp' id='aaNote'></div>" +
+      "<div class='g3' style='margin-top:12px'><div class='fld'><label for='aaDate'>" + (cat === "per_lead" ? "Lead day" : "Date <span class='opt'>optional</span>") + "</label><input class='inp' id='aaDate' type='date'></div>" +
+      "<div class='fld' style='grid-column:span 2'><label for='aaNote'>Note <span class='opt'>optional</span></label><input class='inp' id='aaNote'></div></div>" +
       "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Add</button></div>");
     $("mCancel").onclick = T.closeModal;
     $("mSave").onclick = async function () {
       var amt = parseFloat($("aaAmt").value);
       if (!isFinite(amt) || !amt) { T.toast("Enter an amount"); return; }
+      var date = $("aaDate").value || null;
+      if (cat === "per_lead" && !date) { T.toast("Pick the day the leads came in"); return; }
       var btn = this;
       if (btn.disabled) { return; }
       btn.disabled = true;
       var cid = $("aaClient").value, c = byId(d.clients, cid);
       try {
         var me = await T.sb.auth.getUser();
-        var row = { client_id: cid, category: cat, month: $("aaMonth").value + "-01", amount: Math.round(amt * 100) / 100, note: $("aaNote").value.trim(), source: "manual",
+        var row = { client_id: cid, category: cat, month: (date ? date.slice(0, 7) : $("aaMonth").value) + "-01", entry_date: date, amount: Math.round(amt * 100) / 100, note: $("aaNote").value.trim(), source: "manual",
           created_by: (me.data && me.data.user && me.data.user.email) || "" };
         if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
-        await q(T.sb.from("money_entries").insert(row)); T.closeModal(); await load(true); drawReports(el); T.toast("Added");
+        await q(T.sb.from("money_entries").insert(row));
       }
-      catch (e) { btn.disabled = false; T.fail(e); }
+      catch (e) { btn.disabled = false; T.fail(e); return; }
+      T.closeModal(); T.toast("Added");
+      try { await load(true); drawReports(el); } catch (e) { T.toast("Added. Refresh the page to see it."); }
     };
   }
 
@@ -724,7 +735,7 @@
       "<h3 class='h3'>Ad accounts</h3><div class='acct-list'>" + (list.length ? list.map(function (a) {
         var c = d.acctClient[a.ad_account_id];
         return "<div class='acct'><div><b>" + esc(a.name || "Ad account") + "</b><small>" + esc(a.ad_account_id) + (a.balance != null ? " · " + esc(money(a.balance, { cents: true })) + " not yet charged" : "") + (a.funding_source ? " · " + esc(a.funding_source) : "") +
-          (a.last_synced_at ? " · synced " + esc(dateShort(a.last_synced_at.slice(0, 10))) : "") +
+          (a.last_synced_at ? " · synced " + esc(new Date(a.last_synced_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })) : "") +
           (a.last_error ? " · <span style='color:var(--bad)'>" + esc(a.last_error) + "</span>" : "") + "</small></div>" +
           "<select class='inp' data-acct='" + esc(a.ad_account_id) + "' aria-label='Client for ad account " + esc(a.ad_account_id) + "'><option value=''>Not a client</option>" +
           d.clients.map(function (x) { return "<option value='" + x.id + "'" + (c && c.id === x.id ? " selected" : "") + ">" + esc(x.business_name) + "</option>"; }).join("") + "</select></div>";

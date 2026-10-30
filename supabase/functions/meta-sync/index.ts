@@ -19,7 +19,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const ALLOWED_ORIGINS = ["https://tracker.solidgoldsystems.com", "https://solidgoldtracker.netlify.app"];
 const GRAPH = "https://graph.facebook.com/" + (Deno.env.get("META_API_VERSION") || "v23.0");
 const FIRST_DAY = "2026-01-01";     // first sync goes back to here
-const REFRESH_DAYS = 3;             // Meta adjusts recent days; re-pull them each run
+const REFRESH_DAYS = 7;             // Meta adjusts recent days (late-attributed leads, spend credits): re-pull them each run
 // SGS's own ad account(s): also pulled per ad (campaign / ad set / ad) for the SGS Leads tab.
 const OWN_ACCOUNTS = (Deno.env.get("META_OWN_ACCOUNTS") || "1399902944415343").split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -115,6 +115,7 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
     fields: "event_time,event_type,extra_data", since: since, until: ymd(new Date()), limit: "500",
   }, token);
   const rows: any[] = [];
+  let skipped = 0;
   for (const ev of events) {
     if (ev.event_type !== "ad_account_billing_charge") continue;
     const x = parseExtra(ev.extra_data);
@@ -123,7 +124,7 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
     const date = nyDate(ev.event_time);
     const txn = String(x.transaction_id || x.txn_id || "");
     // Billing-report rows share the meta:<transaction id> reference, so those dedupe on their own.
-    if (csvCut && date <= csvCut && !txn) continue;
+    if (csvCut && date <= csvCut && !txn) { skipped++; continue; }
     const card = String(x.payment_method || x.funding_source || x.card || card0 || "");
     rows.push({
       client_id: clientId, category: "ad_spend", month: date.slice(0, 7) + "-01", entry_date: date,
@@ -134,8 +135,7 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
   }
   // Billing events we couldn't read: surface one so the format can be fixed (shows in Settings).
   const billing = events.filter((e) => e.event_type === "ad_account_billing_charge");
-  const newer = billing.filter((e) => !csvCut || nyDate(e.event_time) >= csvCut);
-  if (newer.length && !rows.length) {
+  if (billing.length > skipped && !rows.length) {
     throw new Error("Couldn't read billing charges; sample: " + JSON.stringify(billing[0].extra_data).slice(0, 300));
   }
   if (!rows.length) return 0;
@@ -184,9 +184,11 @@ async function syncAdEvents(clients: any[], delivering: Record<string, boolean>)
   for (const c of clients) {
     const accts = (c.meta_ad_account_ids || []).filter((x: string) => /^\d+$/.test(x));
     if (!accts.length) continue;
+    // Couldn't check one of the accounts this run: leave this client's dates as they are.
+    if (accts.some((a: string) => delivering[a] === undefined)) continue;
     const spend: Record<string, number> = {};
     for (let from = 0; from < 20000; from += 1000) {
-      const { data } = await db.from("meta_daily").select("day,spend").in("ad_account_id", accts).gt("spend", 0).order("day").range(from, from + 999);
+      const { data } = await db.from("meta_daily").select("day,spend").in("ad_account_id", accts).gt("spend", 0).order("day").order("ad_account_id").range(from, from + 999);
       for (const r of data || []) spend[r.day] = (spend[r.day] || 0) + Number(r.spend);
       if (!data || data.length < 1000) break;
     }
@@ -210,13 +212,22 @@ async function syncAdEvents(clients: any[], delivering: Record<string, boolean>)
     }
     close(start, last, true);
     const rows = events.map((e) => ({ client_id: c.id, kind: e.kind, event_date: e.day, note: e.note, source: "meta", ad_account_id: accts[0] }));
-    const { data: old } = await db.from("ad_events").select("id,kind,event_date").eq("client_id", c.id).eq("source", "meta");
+    const { data: old } = await db.from("ad_events").select("id,kind,event_date,seen_at").eq("client_id", c.id).eq("source", "meta");
     const want = new Set(rows.map((r) => r.kind + "|" + r.event_date));
-    const stale = (old || []).filter((o: any) => !want.has(o.kind + "|" + o.event_date)).map((o: any) => o.id);
-    if (stale.length) await db.from("ad_events").delete().in("id", stale);
+    const staleRows = (old || []).filter((o: any) => !want.has(o.kind + "|" + o.event_date));
     const have = new Set((old || []).map((o: any) => o.kind + "|" + o.event_date));
-    const add = rows.filter((r) => !have.has(r.kind + "|" + r.event_date));
-    if (add.length) { const { error } = await db.from("ad_events").insert(add); if (error) throw error; made += add.length; }
+    const add: any[] = rows.filter((r) => !have.has(r.kind + "|" + r.event_date));
+    // A date that only moved a few days (Meta revised a day's spend) keeps its "Done" from Overview.
+    for (const r of add) {
+      const was = staleRows.find((o: any) => o.seen_at && o.kind === r.kind && Math.abs(gap(o.event_date, r.event_date)) <= 3);
+      if (was) r.seen_at = was.seen_at;
+    }
+    if (staleRows.length) await db.from("ad_events").delete().in("id", staleRows.map((o: any) => o.id));
+    for (const r of add) {
+      const { error } = await db.from("ad_events").insert(r);
+      if (error && error.code !== "23505") throw error;   // 23505: another run just added the same date
+      if (!error) made++;
+    }
   }
   return made;
 }
@@ -261,7 +272,13 @@ async function syncLeads(token: string, acctClient: Record<string, string>, quic
       try {
         const r = await graph("/", { ids: ask.slice(i, i + 50).join(","), fields: "account_id" }, token);
         for (const id of ask.slice(i, i + 50)) adAcct[id] = String((r[id] && r[id].account_id) || "");
-      } catch (_) { for (const id of ask.slice(i, i + 50)) adAcct[id] = ""; }
+      } catch (_) {
+        // One deleted or unreadable ad fails the whole batch: look the rest up one at a time.
+        for (const id of ask.slice(i, i + 50)) {
+          try { const a = await graph("/" + id, { fields: "account_id" }, token); adAcct[id] = String(a.account_id || ""); }
+          catch (_) { adAcct[id] = ""; }
+        }
+      }
     }
   }
   for (const pg of pages) {
@@ -314,6 +331,9 @@ async function syncLeads(token: string, acctClient: Record<string, string>, quic
 async function runSync(trigger: string, sinceOverride?: string) {
   const token = Deno.env.get("META_ACCESS_TOKEN") || "";
   if (!token) return { ok: false, configured: false, message: "Meta isn't connected yet (META_ACCESS_TOKEN not set)." };
+  // A run the platform stopped at its time limit never finished: close it out.
+  await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok: false, message: "Timed out" })
+    .is("finished_at", null).lt("started_at", new Date(Date.now() - 15 * 60000).toISOString());
   const { data: run, error: runErr } = await db.from("meta_sync_runs").insert({ trigger }).select("id").single();
   if (runErr) return { ok: false, configured: true, message: "Couldn't start the sync: " + runErr.message };
   let rows = 0, accounts = 0;

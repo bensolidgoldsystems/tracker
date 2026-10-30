@@ -8,6 +8,9 @@
     X-Robots-Tag = "noindex, nofollow"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    # Nothing may show Tracker inside a frame (stops click-jacking on a finance app).
+    X-Frame-Options = "DENY"
+    Content-Security-Policy = "frame-ancestors 'none'"
 
 [[headers]]
   for = "/assets/*.js"

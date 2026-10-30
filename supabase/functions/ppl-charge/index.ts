@@ -104,7 +104,8 @@ async function importHistory(clientId: string, customers: string[]) {
     const all: any[] = [];
     let after = "";
     for (let i = 0; i < 20; i++) {
-      const p: Record<string, string> = { customer: cus, limit: "100" };
+      // Same start date as stripe-sync, so imported rows aren't removed again by its cleanup.
+      const p: Record<string, string> = { customer: cus, limit: "100", "created[gte]": String(Math.floor(new Date("2026-01-01T00:00:00-05:00").getTime() / 1000)) };
       if (after) p.starting_after = after;
       const list = await stripe("GET", "/charges", p);
       all.push(...(list.data || []));
@@ -161,6 +162,9 @@ Deno.serve(async (req) => {
       if (!(leads >= 1 && leads <= 500)) return json(req, 400, { error: "Enter how many leads" });
       if (!(price > 0)) return json(req, 400, { error: "Set this client's price per lead first (Clients → services)." });
       if (!customers.length) return json(req, 400, { error: "This client has no Stripe customer linked." });
+      // A charge that never finished (function stopped mid-way) doesn't block the day forever.
+      await db.from("money_entries").delete().eq("client_id", clientId).like("external_ref", "pending:%")
+        .lt("created_at", new Date(Date.now() - 15 * 60000).toISOString());
       // Never bill the same day twice by accident.
       const { data: prior } = await db.from("money_entries").select("id,amount,quantity").eq("client_id", clientId)
         .eq("category", "per_lead").eq("entry_date", day);
@@ -185,7 +189,7 @@ Deno.serve(async (req) => {
           amount: String(amount), currency: "usd", customer: card.customer, payment_method: card.payment_method,
           off_session: "true", confirm: "true", description: desc, statement_descriptor_suffix: "LEADS",
           "metadata[tracker_client_id]": clientId, "metadata[lead_day]": day, "metadata[leads]": String(leads), "metadata[charged_by]": who,
-        }, "ppl-" + clientId + "-" + day + "-" + leads + "-" + card.payment_method + (body.again ? "-again-" + Date.now() : ""));
+        }, "ppl-" + claim.id);   // one key per attempt: the day claim above already stops duplicates
       } catch (e) {
         await db.from("money_entries").delete().eq("id", claim.id);
         throw e;

@@ -25,8 +25,14 @@
     var meta = mine.filter(function (e) { return e.source === "meta"; });
     mine.forEach(function (e) {
       e._replaced = false;
-      if (e.source === "meta" || !meta.length || e.kind === "stopped" || !dir(e.kind)) { return; }
-      e._replaced = meta.some(function (m) { return dir(m.kind) === dir(e.kind) && Math.abs(days(m.event_date, e.event_date)) <= DEDUPE_DAYS; });
+      if (e.source === "meta" || !meta.length || e.kind === "stopped" || !dir(e.kind) || e.event_date > today()) { return; }
+      // Same change as a nearby Meta date, unless Meta shows the opposite change in between
+      // (then the hand-entered one is a newer, separate change and stands).
+      e._replaced = meta.some(function (m) {
+        if (dir(m.kind) !== dir(e.kind) || Math.abs(days(m.event_date, e.event_date)) > DEDUPE_DAYS) { return false; }
+        var lo = m.event_date < e.event_date ? m.event_date : e.event_date, hi = m.event_date < e.event_date ? e.event_date : m.event_date;
+        return !meta.some(function (o) { return dir(o.kind) && dir(o.kind) !== dir(e.kind) && o.event_date > lo && o.event_date <= hi; });
+      });
     });
     // A hand-entered pause while already paused (or launch while live) changes nothing: drop it too.
     if (meta.length) {

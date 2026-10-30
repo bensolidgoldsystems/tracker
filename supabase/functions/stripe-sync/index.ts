@@ -6,7 +6,8 @@
 //   "N Leads" / "Qualified Lead"              -> per_lead
 //   anything else (management, websites)      -> revenue
 // Card payments on prepays and shoots carry a 3% surcharge; the extra is recorded as card_fee.
-// Spreadsheet rows for months Stripe now covers move to money_entries_superseded (cash/Zelle rows stay).
+// Spreadsheet rows for a client and month Stripe has payments for move to money_entries_superseded
+// (cash/Zelle rows stay); rows moved earlier come back if Stripe no longer covers that month.
 // Auth: x-cron-secret (Vault meta_sync_secret) or a signed-in team member.
 // Secret: STRIPE_SECRET_KEY (restricted: Invoices read, Charges read, Customers read).
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -86,7 +87,7 @@ function classify(desc: string): string {
   const s = String(desc || "");
   if (/ad spend|pre ?-?payment|prepay|reimburs|projected spend/i.test(s)) return "ad_reimbursement";
   if (/video|shoot/i.test(s)) return "video_shoot";
-  if (/\bleads?\b/i.test(s) && !/lead-?gen/i.test(s)) return "per_lead";
+  if (/\bleads?\b/i.test(s) && !/lead[\s-]?gen/i.test(s)) return "per_lead";   // "Lead Gen retainer" is revenue
   return "revenue";
 }
 // Base amount + card fee covered. Prepays: a 3% surcharge shows as amount = base * 1.03 with a
@@ -109,6 +110,11 @@ function leadQty(desc: string, qty: number): number | null {
 
 async function runSync(dry = false) {
   if (!Deno.env.get("STRIPE_SECRET_KEY")) return { ok: false, configured: false, message: "Stripe isn't connected." };
+  if (!dry) {
+    // A run the platform stopped at its time limit never finished: close it out.
+    await db.from("stripe_sync_runs").update({ finished_at: new Date().toISOString(), ok: false, message: "Timed out" })
+      .is("finished_at", null).lt("started_at", new Date(Date.now() - 15 * 60000).toISOString());
+  }
   const { data: run } = dry ? { data: null } : await db.from("stripe_sync_runs").insert({}).select("id").single();
   try {
     const since = String(Math.floor(new Date(FIRST_DAY + "T00:00:00-05:00").getTime() / 1000));
@@ -245,28 +251,35 @@ async function runSync(dry = false) {
       if (error) throw error;
     }
 
-    // Spreadsheet rows from a client's first Stripe-paid month on are replaced (cash/Zelle rows stay).
-    const first: Record<string, string> = {};
-    for (const r of rows) {
-      if (!r.client_id || !["revenue", "ad_reimbursement", "per_lead"].includes(r.category)) continue;
-      const k = r.client_id + "|" + r.category;
-      if (!first[k] || r.month < first[k]) first[k] = r.month;
-    }
-    const sheet = await dbAll(() => db.from("money_entries").select("*").eq("source", "sheet").in("category", ["revenue", "ad_reimbursement", "per_lead"]).order("id"));
-    const replace = sheet.filter((e: any) => {
-      const f = first[e.client_id + "|" + e.category];
-      return f && e.month >= f && !/cash|zelle/i.test(e.payment_method || "");
-    });
+    // Spreadsheet rows for a client and month that Stripe has payments for are replaced by Stripe's
+    // (cash/Zelle rows stay). Months Stripe has nothing for keep the spreadsheet amount.
+    const SHEET_CATS = ["revenue", "ad_reimbursement", "per_lead"];
+    const INCOME = ["revenue", "ad_reimbursement", "per_lead", "video_shoot", "card_fee"];
+    const covered = new Set<string>();
+    for (const r of rows) if (r.client_id && r.amount > 0 && INCOME.includes(r.category)) covered.add(r.client_id + "|" + String(r.month).slice(0, 7));
+    const isCovered = (e: any) => covered.has(e.client_id + "|" + String(e.month).slice(0, 7)) && !/cash|zelle/i.test(e.payment_method || "");
+    const sheet = await dbAll(() => db.from("money_entries").select("*").eq("source", "sheet").in("category", SHEET_CATS).order("id"));
+    const replace = sheet.filter(isCovered);
     if (replace.length) {
       const { error } = await db.from("money_entries_superseded").upsert(replace, { onConflict: "id" });
       if (error) throw error;
       await db.from("money_entries").delete().in("id", replace.map((e: any) => e.id));
     }
+    const moved = await dbAll(() => db.from("money_entries_superseded").select("*").order("id"));
+    const restore = moved.filter((e: any) => !isCovered(e));
+    if (restore.length) {
+      const { error } = await db.from("money_entries").upsert(restore.map(({ superseded_at: _s, ...e }: any) => e), { onConflict: "id" });
+      if (error) throw error;
+      await db.from("money_entries_superseded").delete().in("id", restore.map((e: any) => e.id));
+    }
+    // Pay-per-lead charges that never finished (the charge function was stopped mid-way) are cleared
+    // after 15 minutes; if the card was charged, the Stripe row above already records it.
+    await db.from("money_entries").delete().like("external_ref", "pending:%").lt("created_at", new Date(Date.now() - 15 * 60000).toISOString());
 
     const um = Object.values(unmatched);
-    const message = rows.length + " Stripe entries" + (replace.length ? ", " + replace.length + " spreadsheet rows replaced" : "") + (um.length ? ", " + um.length + " customer(s) not matched to a client" : "") + feeNote;
+    const message = rows.length + " Stripe entries" + (replace.length ? ", " + replace.length + " spreadsheet rows replaced" : "") + (restore.length ? ", " + restore.length + " spreadsheet rows restored" : "") + (um.length ? ", " + um.length + " customer(s) not matched to a client" : "") + feeNote;
     await db.from("stripe_sync_runs").update({ finished_at: new Date().toISOString(), ok: true, entries: rows.length, message, unmatched: um }).eq("id", run?.id);
-    return { ok: true, configured: true, entries: rows.length, replaced: replace.length, unmatched: um, message };
+    return { ok: true, configured: true, entries: rows.length, replaced: replace.length, restored: restore.length, unmatched: um, message };
   } catch (e) {
     const message = String((e as Error).message || e).slice(0, 900);
     await db.from("stripe_sync_runs").update({ finished_at: new Date().toISOString(), ok: false, message }).eq("id", run?.id);

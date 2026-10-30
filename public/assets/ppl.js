@@ -106,7 +106,8 @@
         var n = leads[dd] || 0, b = billed[dd];
         var right;
         if (b) {
-          right = '<span class="ppl-billed"><span class="badge ok">Billed</span> ' + b.map(function (e) {
+          var charging = b.some(function (e) { return /^pending:/.test(e.external_ref || ""); });
+          right = '<span class="ppl-billed">' + (charging ? '<span class="badge warn">Charging…</span> ' : '<span class="badge ok">Billed</span> ') + b.map(function (e) {
             return esc((e.quantity ? e.quantity + " lead" + (e.quantity === 1 ? "" : "s") + " · " : "") + money(e.amount));
           }).join(", ") + '</span><button class="btn sm ghost" data-again="' + dd + '">Charge again</button>';
         } else if (dd === today) {
