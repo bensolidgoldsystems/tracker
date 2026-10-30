@@ -80,7 +80,8 @@ Deno.serve(async (req) => {
   if (!/^[0-9a-f-]{36}$/.test(sessionId)) return json(req, 400, { error: "Sign in again" });
 
   // Only Tracker team members get codes.
-  const { data: member } = await admin.from("team_members").select("email").ilike("email", user.email!).maybeSingle();
+  // ilike for case, with % and _ escaped so they match literally.
+  const { data: member } = await admin.from("team_members").select("email").ilike("email", user.email!.replace(/[\\%_]/g, "\\$&")).maybeSingle();
   if (!member) return json(req, 403, { error: "This account doesn't have Tracker access." });
 
   let body: any = {};
@@ -131,7 +132,10 @@ Deno.serve(async (req) => {
         .order("created_at", { ascending: false }).limit(1).maybeSingle();
       if (!row || new Date(row.expires_at) < new Date()) return json(req, 400, { error: "That code expired. Send a new one." });
       if (row.attempts >= MAX_ATTEMPTS) return json(req, 400, { error: "Too many wrong codes. Send a new one." });
-      await admin.from("mfa_email_codes").update({ attempts: row.attempts + 1 }).eq("id", row.id);
+      // Count this try only if nobody else counted one at the same moment (parallel guesses fail).
+      const { data: counted } = await admin.from("mfa_email_codes").update({ attempts: row.attempts + 1 })
+        .eq("id", row.id).eq("attempts", row.attempts).is("used_at", null).select("id");
+      if (!counted || !counted.length) return json(req, 409, { error: "Try that code again." });
       if (!same(row.code_hash, await sha256(sessionId + ":" + code))) {
         const left = MAX_ATTEMPTS - row.attempts - 1;
         return json(req, 400, { error: left > 0 ? "Wrong code. " + left + " tries left." : "Too many wrong codes. Send a new one." });

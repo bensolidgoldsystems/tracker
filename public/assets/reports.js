@@ -64,7 +64,10 @@
   }
 
   /* ---------- data ---------- */
-  async function load() {
+  // Data is reused for 30 seconds (moving between Overview, Finance, client pages); saves reload it.
+  var loadedAt = 0, CACHE_MS = 30000;
+  async function load(force) {
+    if (!force && d && Date.now() - loadedAt < CACHE_MS) { applyLive(); return d; }
     var res = await Promise.all([
       q(T.sb.from("clients").select("*").order("business_name")),
       q(T.sb.from("partners").select("*").order("name")),
@@ -72,7 +75,7 @@
       q(T.sb.from("services").select("id,name")),
       q(T.sb.from("ad_events").select("*")),
       all(function () { return T.sb.from("money_entries").select("*").order("entry_date", { ascending: true, nullsFirst: true }).order("id"); }),
-      all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
+      all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,leads").gt("leads", 0).order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_ad_accounts").select("*").order("name")),
       q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5)),
       q(T.sb.from("stripe_sync_runs").select("*").not("finished_at", "is", null).order("started_at", { ascending: false }).limit(1)).catch(function () { return []; }),
@@ -81,6 +84,7 @@
     d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null };
     index();
     applyLive();
+    loadedAt = Date.now();
     return d;
   }
 
@@ -108,6 +112,7 @@
       if (Number(r.leads)) { add(c.id, ym(r.day), "leads", Number(r.leads)); }
     });
     d.cell = cell; d.cutoff = cutoff; d.acctClient = acctClient;
+    d.acctById = {}; d.accounts.forEach(function (a) { d.acctById[a.ad_account_id] = a; });
   }
   function val(cid, key, cat) { return ((d.cell[cid] || {})[key] || {})[cat] || 0; }
   function spent(cid, key) { return val(cid, key, "ad_spend") + val(cid, key, "synced_spend"); }
@@ -144,7 +149,7 @@
   function unbilled(c) {
     var total = 0, cards = [], at = null, any = false;
     (c.meta_ad_account_ids || []).forEach(function (id) {
-      var a = byId(d.accounts.map(function (x) { return Object.assign({ id: x.ad_account_id }, x); }), id);
+      var a = d.acctById[id];
       if (!a || a.balance == null) { return; }
       any = true; total += Number(a.balance);
       if (a.funding_source && cards.indexOf(a.funding_source) === -1) { cards.push(a.funding_source); }
@@ -182,9 +187,13 @@
     paintUnb();
     if (!liveTimer) {
       liveTimer = setInterval(function () {
-        if (document.visibilityState === "visible" && document.querySelector("[data-unb]")) { liveBalances(true); }
+        if (document.visibilityState === "visible" && unbOnScreen()) { liveBalances(true); }
       }, 300000);
     }
+  }
+  // Views are hidden, not removed, so check that a balance is in the view being shown.
+  function unbOnScreen() {
+    return Array.prototype.some.call(document.querySelectorAll("[data-unb]"), function (n) { return n.offsetParent !== null; });
   }
   function paintUnb() {
     if (!d) { return; }
@@ -315,7 +324,7 @@
      (sets ad_events.seen_at). Billing-cycle charges due in the next 2 days show on their own. */
   var REMIND_DAYS = 14;
   function adReminders(items) {
-    var t = todayStr(), cutoff = new Date(Date.now() - REMIND_DAYS * 864e5).toISOString().slice(0, 10);
+    var t = todayStr(), cutoff = (function () { var x = new Date(); x.setDate(x.getDate() - REMIND_DAYS); return x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0"); })();
     d.events.filter(function (e) {
       return e.source === "meta" && !e.seen_at && e.event_date >= cutoff && e.event_date <= t && /^(launched|relaunched|paused)$/.test(e.kind);
     }).sort(function (a, b) { return a.event_date < b.event_date ? 1 : -1; }).forEach(function (e) {
@@ -521,7 +530,7 @@
         totalRow("Total prepaid", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
       section("secPay", "Pay " + partnerName, "Paid = what we paid " + esc(partnerName) + " (we pay before the shoot). Collected = what the client paid us for the shoot ($600 each, from Stripe). Card fees = the 3% clients pay on top when they use a card for shoots or ad prepays.",
         head("Client") + payRows.map(function (c) {
-          return "<tbody class='grp'><tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='13'></td></tr>" +
+          return "<tbody class='grp'><tr class='grp-h'><th class='sticky'><a href=\"#client/" + c.id + "\">" + esc(c.business_name) + "</a></th><td class='st'>" + statusBadge(statusOf(c)) + "</td><td colspan='" + (keys.length + 1) + "'></td></tr>" +
             row(c, "partner_payout", { label: "Paid " + partnerName }) + row(c, "video_shoot", { label: "Collected for shoots" }) + "</tbody>";
         }).join("") +
         totalRow("Total paid " + partnerName, sumCat(payRows, "partner_payout")).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
@@ -595,14 +604,17 @@
     document.querySelectorAll("[data-del]").forEach(function (b) {
       b.onclick = async function () {
         if (!confirm("Delete this amount?")) { return; }
-        try { await q(T.sb.from("money_entries").delete().eq("id", b.dataset.del)); await load(); drawReports(el); editCell(cid, key, cat, el); T.toast("Deleted"); }
+        try { await q(T.sb.from("money_entries").delete().eq("id", b.dataset.del)); await load(true); drawReports(el); editCell(cid, key, cat, el); T.toast("Deleted"); }
         catch (e) { T.fail(e); }
       };
     });
     $("meAmt").focus();
     $("mSave").onclick = async function () {
+      var btn = this;
       var amt = parseFloat($("meAmt").value);
       if (!isFinite(amt) || !amt) { T.toast("Enter an amount"); return; }
+      if (btn.disabled) { return; }
+      btn.disabled = true;
       var date = $("meDate").value || null;
       var row = { amount: Math.round(amt * 100) / 100, entry_date: date, note: $("meNote").value.trim() };
       try {
@@ -615,8 +627,8 @@
           if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
           await q(T.sb.from("money_entries").insert(row));
         }
-        await load(); drawReports(el); editCell(cid, key, cat, el); T.toast(editing ? "Saved" : "Added");
-      } catch (e) { T.fail(e); }
+        await load(true); drawReports(el); editCell(cid, key, cat, el); T.toast(editing ? "Saved" : "Added");
+      } catch (e) { btn.disabled = false; T.fail(e); }
     };
   }
   function addAmount(cat, el) {
@@ -640,13 +652,18 @@
     $("mSave").onclick = async function () {
       var amt = parseFloat($("aaAmt").value);
       if (!isFinite(amt) || !amt) { T.toast("Enter an amount"); return; }
+      var btn = this;
+      if (btn.disabled) { return; }
+      btn.disabled = true;
       var cid = $("aaClient").value, c = byId(d.clients, cid);
-      var me = await T.sb.auth.getUser();
-      var row = { client_id: cid, category: cat, month: $("aaMonth").value + "-01", amount: Math.round(amt * 100) / 100, note: $("aaNote").value.trim(), source: "manual",
-        created_by: (me.data && me.data.user && me.data.user.email) || "" };
-      if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
-      try { await q(T.sb.from("money_entries").insert(row)); T.closeModal(); await load(); drawReports(el); T.toast("Added"); }
-      catch (e) { T.fail(e); }
+      try {
+        var me = await T.sb.auth.getUser();
+        var row = { client_id: cid, category: cat, month: $("aaMonth").value + "-01", amount: Math.round(amt * 100) / 100, note: $("aaNote").value.trim(), source: "manual",
+          created_by: (me.data && me.data.user && me.data.user.email) || "" };
+        if (cat === "partner_payout") { row.partner_id = (c && c.partner_id) || ((d.partners[0] || {}).id || null); }
+        await q(T.sb.from("money_entries").insert(row)); T.closeModal(); await load(true); drawReports(el); T.toast("Added");
+      }
+      catch (e) { btn.disabled = false; T.fail(e); }
     };
   }
 
@@ -685,7 +702,7 @@
     el.innerHTML = '<div class="panel"><h2>Meta ads</h2><p class="muted">Loading...</p></div>';
     var configured = false;
     try {
-      await load();
+      await load(true);
       var st = await T.fn("meta-sync", { action: "status" });
       configured = !!(st && st.configured);
     } catch (e) { /* show as not connected */ }
@@ -752,7 +769,8 @@
   function pnlSection(y, keys, curKey, lbl) {
     var p = d.pnl;
     var hasQbo = !!(p && p.rows && p.rows.length);
-    var sum = function (cat) { return keys.map(function (k) { return d.entries.reduce(function (s, e) { return s + (e.category === cat && ym(e.month) === k ? Number(e.amount) : 0); }, 0); }); };
+    var cids = Object.keys(d.cell);
+    var sum = function (cat) { return keys.map(function (k) { return cids.reduce(function (s, cid) { return s + val(cid, k, cat); }, 0); }); };
     var add = function (a, b) { return a.map(function (v, i) { return v + b[i]; }); };
     var neg = function (a) { return a.map(function (v) { return -v; }); };
     var zero = keys.map(function () { return 0; });
@@ -761,7 +779,7 @@
 
     var inc = { revenue: sum("revenue"), ppl: sum("per_lead"), prepaid: sum("ad_reimbursement"), shoot: sum("video_shoot"), cardfee: sum("card_fee") };
     var income = [inc.revenue, inc.ppl, inc.prepaid, inc.shoot, inc.cardfee].reduce(add, zero);
-    var adSpend = keys.map(function (k) { return d.clients.reduce(function (s, c) { return s + spent(c.id, k); }, 0) + spent("none", k); });
+    var adSpend = keys.map(function (k) { return cids.reduce(function (s, cid) { return s + spent(cid, k); }, 0); });
     var fees = sum("stripe_fee");
     var gross = add(income, neg(add(adSpend, fees)));
 
@@ -851,6 +869,7 @@
 
   window.SGSReports = {
     init: function (helpers) { T = helpers; },
+    invalidate: function () { loadedAt = 0; },
     overview: overview, reports: reports, metaSettings: metaSettings, clientPanel: clientPanel, qboSettings: qboSettings
   };
 })();

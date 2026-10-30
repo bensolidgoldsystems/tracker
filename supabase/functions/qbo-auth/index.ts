@@ -63,7 +63,9 @@ async function accessToken() {
   const t = await tokenCall({ grant_type: "refresh_token", refresh_token: c.refresh_token });
   const upd = { access_token: t.access_token, refresh_token: t.refresh_token || c.refresh_token, access_expires_at: expiry(t.expires_in),
     refresh_expires_at: t.x_refresh_token_expires_in ? expiry(t.x_refresh_token_expires_in) : c.refresh_expires_at, updated_at: new Date().toISOString() };
-  await db.from("qbo_connection").update(upd).eq("id", 1);
+  // Intuit replaces the refresh token: if it isn't saved, the connection breaks on the next refresh.
+  const { error } = await db.from("qbo_connection").update(upd).eq("id", 1);
+  if (error) throw new Error("Couldn't save the new QuickBooks token: " + error.message);
   return { ...c, ...upd };
 }
 async function qbo(c: any, path: string) {

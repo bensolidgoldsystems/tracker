@@ -101,15 +101,25 @@ async function cardOnFile(customers: string[]) {
 async function importHistory(clientId: string, customers: string[]) {
   let added = 0;
   for (const cus of customers) {
-    const list = await stripe("GET", "/charges", { customer: cus, limit: "100" });
+    const all: any[] = [];
+    let after = "";
+    for (let i = 0; i < 20; i++) {
+      const p: Record<string, string> = { customer: cus, limit: "100" };
+      if (after) p.starting_after = after;
+      const list = await stripe("GET", "/charges", p);
+      all.push(...(list.data || []));
+      if (!list.has_more || !(list.data || []).length) break;
+      after = list.data[list.data.length - 1].id;
+    }
     const rows = [];
-    for (const ch of list.data || []) {
+    for (const ch of all) {
       if (ch.status !== "succeeded" || ch.refunded) continue;
       const p = parseDesc(ch.description || "");
       if (!p) continue;
       rows.push({
         client_id: clientId, category: "per_lead", month: p.day.slice(0, 7) + "-01", entry_date: p.day,
-        amount: (ch.amount - (ch.amount_refunded || 0)) / 100, quantity: p.leads, source: "stripe",
+        // Full amount: partial refunds are recorded as their own rows by stripe-sync.
+        amount: ch.amount / 100, quantity: p.leads, source: "stripe",
         external_ref: "stripe:" + ch.id, payment_method: ch.payment_method_details && ch.payment_method_details.card ? "Card ··" + ch.payment_method_details.card.last4 : "Stripe",
         note: ch.description,
       });
@@ -161,17 +171,33 @@ Deno.serve(async (req) => {
       if (!card) return json(req, 400, { error: "No saved card for this client in Stripe." });
       const amount = Math.round(leads * price * 100);
       const desc = leads + " Lead" + (leads === 1 ? "" : "s") + " - " + mdy(day);
-      const pi = await stripe("POST", "/payment_intents", {
-        amount: String(amount), currency: "usd", customer: card.customer, payment_method: card.payment_method,
-        off_session: "true", confirm: "true", description: desc, statement_descriptor_suffix: "LEADS",
-        "metadata[tracker_client_id]": clientId, "metadata[lead_day]": day, "metadata[leads]": String(leads), "metadata[charged_by]": who,
-      }, "ppl-" + clientId + "-" + day + "-" + leads + (body.again ? "-again-" + Date.now() : ""));
-      if (pi.status !== "succeeded") return json(req, 402, { error: "Payment didn't go through (" + pi.status + ")." });
-      const ref = "stripe:" + (pi.latest_charge || pi.id);
-      await db.from("money_entries").upsert({
+      // Claim the day first: a second charge for the same day (another tab, a double click) hits the
+      // unique external_ref and stops here instead of charging the card again.
+      const pending = "pending:ppl:" + clientId + ":" + day + (body.again ? ":" + Date.now() : "");
+      const { data: claim, error: claimErr } = await db.from("money_entries").insert({
         client_id: clientId, category: "per_lead", month: day.slice(0, 7) + "-01", entry_date: day, amount: amount / 100,
-        quantity: leads, source: "stripe", external_ref: ref, payment_method: card.label, note: desc, created_by: who,
-      }, { onConflict: "external_ref", ignoreDuplicates: true });
+        quantity: leads, source: "manual", external_ref: pending, payment_method: card.label, note: desc + " (charging...)", created_by: who,
+      }).select("id").single();
+      if (claimErr || !claim) return json(req, 409, { error: "This day is being charged or was already billed. Refresh and check.", already: true });
+      let pi: any;
+      try {
+        pi = await stripe("POST", "/payment_intents", {
+          amount: String(amount), currency: "usd", customer: card.customer, payment_method: card.payment_method,
+          off_session: "true", confirm: "true", description: desc, statement_descriptor_suffix: "LEADS",
+          "metadata[tracker_client_id]": clientId, "metadata[lead_day]": day, "metadata[leads]": String(leads), "metadata[charged_by]": who,
+        }, "ppl-" + clientId + "-" + day + "-" + leads + "-" + card.payment_method + (body.again ? "-again-" + Date.now() : ""));
+      } catch (e) {
+        await db.from("money_entries").delete().eq("id", claim.id);
+        throw e;
+      }
+      if (pi.status !== "succeeded") {
+        await db.from("money_entries").delete().eq("id", claim.id);
+        return json(req, 402, { error: "Payment didn't go through (" + pi.status + ")." });
+      }
+      const ref = "stripe:" + (pi.latest_charge || pi.id);
+      const { error: upErr } = await db.from("money_entries").update({ source: "stripe", external_ref: ref, note: desc }).eq("id", claim.id);
+      // The hourly Stripe sync may have recorded this charge already: then drop the placeholder.
+      if (upErr) await db.from("money_entries").delete().eq("id", claim.id);
       return json(req, 200, { ok: true, amount: amount / 100, description: desc, card: card.label });
     }
     return json(req, 400, { error: "Unknown action" });

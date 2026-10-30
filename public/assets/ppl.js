@@ -17,7 +17,7 @@
   }
   function ymd(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
   function dayLabel(s) {
-    var d = new Date(s + "T12:00:00"), t = ymd(new Date()), y = ymd(new Date(Date.now() - 864e5));
+    var n = new Date(), d = new Date(s + "T12:00:00"), t = ymd(n), y = ymd(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1));
     var name = s === t ? "Today" : s === y ? "Yesterday" : d.toLocaleDateString("en-US", { weekday: "short" });
     return "<b>" + esc(name) + "</b><small>" + esc(d.toLocaleDateString("en-US", { month: "short", day: "numeric" })) + "</small>";
   }
@@ -36,11 +36,15 @@
     return { clients: clients, svc: svc, daily: res[2], billed: res[3], lastSync: res[4][0] || null, since: since };
   }
 
-  var el = null, data = null;
+  var el = null, data = null, routeGen = 0;
   async function route(hash, container) {
+    var gen = ++routeGen;
     el = container;
     el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
-    try { data = await load(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+    var next;
+    try { next = await load(); } catch (e) { if (gen === routeGen) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; } return; }
+    if (gen !== routeGen) { return; }
+    data = next;
     var m = String(hash).match(/^#ppl\/([0-9a-f-]{36})/);
     var id = m ? m[1] : (data.clients[0] && data.clients[0].id);
     draw(id);
@@ -65,6 +69,7 @@
       return;
     }
     if (!c) { c = data.clients[0]; }
+    shown = c.id;
     var price = priceOf(c.id), leads = leadsByDay(c), billed = billedByDay(c.id);
     var month = ymd(new Date()).slice(0, 7);
     var mLeads = 0, mBilledLeads = 0, mBilled = 0, unbilledDays = 0, unbilledLeads = 0;
@@ -142,13 +147,17 @@
     return '<div class="stat' + (cls ? " " + cls : "") + '"><span>' + esc(label) + "</span><b>" + (String(value).indexOf("<") === 0 ? value : esc(value)) + "</b>" + (sub ? "<small>" + sub + "</small>" : "") + "</div>";
   }
 
+  var shown = null;   // client on screen right now
+  function onClient(cid) { return shown === cid && location.hash.indexOf("#ppl") === 0; }
   async function cardInfo(c) {
     var info = cardCache[c.id];
     if (!info) {
       try { info = await T.fn("ppl-charge", { action: "info", client_id: c.id }); }
       catch (e) { info = { ok: false, error: e.message }; }
-      cardCache[c.id] = info;
-      if (info && info.imported) { T.toast("Found " + info.imported + " earlier lead charge(s) in Stripe"); data = await load(); draw(c.id); return; }
+      // Only keep a found card; "no card" or an error is asked again next time.
+      if (info && info.ok && info.card) { cardCache[c.id] = info; }
+      if (!onClient(c.id)) { return; }
+      if (info && info.imported) { T.toast("Found " + info.imported + " earlier lead charge(s) in Stripe"); data = await load(); if (onClient(c.id)) { draw(c.id); } return; }
     }
     var cardEl = $("pplCard");
     if (!cardEl) { return; }

@@ -50,18 +50,30 @@ async function stripe(path: string, params: Record<string, string> = {}) {
   if (!res.ok) throw new Error(((body.error && body.error.message) || "Stripe error " + res.status) + " [" + path + "]");
   return body;
 }
+// Every page of a Stripe list. Throws rather than return a partial list: a partial list would make
+// the cleanup below delete real rows.
 async function stripeAll(path: string, params: Record<string, string>) {
   const out: any[] = [];
   let after = "";
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 500; i++) {
     const p = { ...params, limit: "100" } as Record<string, string>;
     if (after) p.starting_after = after;
     const r = await stripe(path, p);
     out.push(...(r.data || []));
-    if (!r.has_more || !r.data.length) break;
+    if (!r.has_more || !r.data.length) return out;
     after = r.data[r.data.length - 1].id;
   }
-  return out;
+  throw new Error("Stripe list too long to read in one run [" + path + "]");
+}
+// All rows of a query (PostgREST returns at most 1,000 per request).
+async function dbAll(make: () => any) {
+  const out: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await make().range(from, from + 999);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < 1000) return out;
+  }
 }
 
 function nyDate(unix: number): string {
@@ -114,8 +126,11 @@ async function runSync(dry = false) {
       const n = norm(name);
       if (!n) return null;
       for (const c of clients || []) {
-        const b = norm(c.business_name), first = b.split(" ")[0];
-        if (b === n || b.startsWith(n) || n.startsWith(b) || (first.length > 4 && n.split(" ")[0] === first)) {
+        const b = norm(c.business_name);
+        // Only an exact business-name match links a customer automatically (pay per lead charges the
+        // linked customer's card, so a loose match could charge the wrong person). Others show as
+        // "not matched" for a person to link on the client page.
+        if (b && b === n) {
           byCus[cus] = c.id; (linkNew[c.id] = linkNew[c.id] || []).push(cus); return c.id;
         }
       }
@@ -131,6 +146,11 @@ async function runSync(dry = false) {
         external_ref: ref, payment_method: "Stripe", note: note.slice(0, 200), quantity: qty });
     };
 
+    const invoicePaid = new Set<string>();
+    for (const inv of invoices) {
+      for (const x of [inv.charge, inv.payment_intent]) if (x) invoicePaid.add(typeof x === "string" ? x : x.id);
+      for (const p of ((inv.payments && inv.payments.data) || [])) { const pi = p.payment && p.payment.payment_intent; if (pi) invoicePaid.add(typeof pi === "string" ? pi : pi.id); }
+    }
     for (const inv of invoices) {
       if (!inv.amount_paid) continue;
       const paidAt = (inv.status_transitions && inv.status_transitions.paid_at) || inv.created;
@@ -161,7 +181,8 @@ async function runSync(dry = false) {
       const cus = typeof ch.customer === "string" ? ch.customer : (ch.customer && ch.customer.id) || "";
       const name = (ch.billing_details && ch.billing_details.name) || "";
       const clientId = clientFor(cus, name);
-      const viaInvoice = /invoice|subscription/i.test(ch.description || "");
+      const pi = typeof ch.payment_intent === "string" ? ch.payment_intent : (ch.payment_intent && ch.payment_intent.id) || "";
+      const viaInvoice = invoicePaid.has(ch.id) || (pi && invoicePaid.has(pi)) || !!ch.invoice || /invoice|subscription/i.test(ch.description || "");
       if (!viaInvoice) {
         const cat = classify(ch.description || "");
         const amt = ch.amount / 100;
@@ -179,7 +200,7 @@ async function runSync(dry = false) {
     }
 
     // Stripe's processing fees, per payment (needs the key's Balance read permission).
-    let feeNote = "";
+    let feeNote = "", feesOk = true;
     try {
       const byCharge: Record<string, any> = {};
       for (const ch of charges) byCharge[ch.id] = ch;
@@ -191,7 +212,7 @@ async function runSync(dry = false) {
         const name = ch ? ((ch.billing_details && ch.billing_details.name) || "") : "";
         push(clientFor(cus, name), name || "Stripe fees", "stripe_fee", nyDate(bt.created), bt.fee / 100, "stripe:fee:" + bt.id, "Stripe fee" + (ch && ch.description ? ": " + ch.description : ""), null);
       }
-    } catch (e) { feeNote = " Stripe fees not included: " + String((e as Error).message || e).slice(0, 200); }
+    } catch (e) { feesOk = false; feeNote = " Stripe fees not updated: " + String((e as Error).message || e).slice(0, 200); }
 
     if (dry) {
       // Preview only: totals by client / category / month, and what the spreadsheet rows would become.
@@ -214,10 +235,15 @@ async function runSync(dry = false) {
         if (error) throw error;
       }
     }
+    // Rows Stripe no longer reports (voided, deleted) are removed. Stripe fees only when they were read.
     const keep = new Set(rows.map((r) => r.external_ref));
-    const { data: old } = await db.from("money_entries").select("id,external_ref").eq("source", "stripe").in("category", STRIPE_CATS);
-    const stale = (old || []).filter((o: any) => !keep.has(o.external_ref)).map((o: any) => o.id);
-    for (let i = 0; i < stale.length; i += 200) await db.from("money_entries").delete().in("id", stale.slice(i, i + 200));
+    const cats = feesOk ? STRIPE_CATS : STRIPE_CATS.filter((c: string) => c !== "stripe_fee");
+    const old = await dbAll(() => db.from("money_entries").select("id,external_ref").eq("source", "stripe").in("category", cats).order("id"));
+    const stale = old.filter((o: any) => !keep.has(o.external_ref)).map((o: any) => o.id);
+    for (let i = 0; i < stale.length; i += 200) {
+      const { error } = await db.from("money_entries").delete().in("id", stale.slice(i, i + 200));
+      if (error) throw error;
+    }
 
     // Spreadsheet rows from a client's first Stripe-paid month on are replaced (cash/Zelle rows stay).
     const first: Record<string, string> = {};
@@ -226,8 +252,8 @@ async function runSync(dry = false) {
       const k = r.client_id + "|" + r.category;
       if (!first[k] || r.month < first[k]) first[k] = r.month;
     }
-    const { data: sheet } = await db.from("money_entries").select("*").eq("source", "sheet").in("category", ["revenue", "ad_reimbursement", "per_lead"]);
-    const replace = (sheet || []).filter((e: any) => {
+    const sheet = await dbAll(() => db.from("money_entries").select("*").eq("source", "sheet").in("category", ["revenue", "ad_reimbursement", "per_lead"]).order("id"));
+    const replace = sheet.filter((e: any) => {
       const f = first[e.client_id + "|" + e.category];
       return f && e.month >= f && !/cash|zelle/i.test(e.payment_method || "");
     });

@@ -17,10 +17,11 @@
   function $(id) { return document.getElementById(id); }
   async function q(p) { var r = await p; if (r.error) { throw r.error; } return r.data; }
   async function all(make) {
-    var out = [];
+    var out = [], seen = {};
     for (var from = 0; from < 50000; from += 1000) {
       var rows = await q(make().range(from, from + 999));
-      out = out.concat(rows);
+      // A sync can insert rows while we page; skip any row already taken from an earlier page.
+      rows.forEach(function (r) { var k = r.id != null ? r.id : null; if (k === null || !seen[k]) { if (k !== null) { seen[k] = 1; } out.push(r); } });
       if (rows.length < 1000) { break; }
     }
     return out;
@@ -39,8 +40,8 @@
   function windowDays() {
     var now = new Date();
     if (view.range === "month") { return [ymd(new Date(now.getFullYear(), now.getMonth(), 1)), today()]; }
-    if (view.range === "7") { return [ymd(new Date(Date.now() - 6 * 864e5)), today()]; }
-    if (view.range === "30") { return [ymd(new Date(Date.now() - 29 * 864e5)), today()]; }
+    if (view.range === "7") { return [ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)), today()]; }
+    if (view.range === "30") { return [ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)), today()]; }
     if (view.range === "year") { return [now.getFullYear() + "-01-01", today()]; }
     if (view.range === "custom") {
       var f = view.from || ymd(new Date(now.getFullYear(), now.getMonth(), 1)), t = view.to || today();
@@ -67,7 +68,16 @@
       all(function () { return T.sb.from("ghl_contacts").select("*").or("is_sgs.eq.true,client_id.not.is.null").order("date_added", { ascending: false }).order("id"); }).catch(function () { return []; }),
       withAds ? all(function () { return T.sb.from("meta_ad_daily").select("*").in("ad_account_id", SGS.adAccounts).order("day").order("ad_id"); }).catch(function () { return []; }) : Promise.resolve([])
     ]);
-    d = { clients: res[0], leads: mergeGhl(res[1], res[5]), daily: res[2], pages: res[3], run: res[4][0] || null, ads: res[6] };
+    var out = { clients: res[0], leads: mergeGhl(res[1], res[5]), daily: res[2], pages: res[3], run: res[4][0] || null, ads: res[6] };
+    // Index once: leads by client (with their local day), daily rows by ad account.
+    out.byClient = {}; out.unmatched = []; out.byAcct = {};
+    out.leads.forEach(function (l) {
+      l._day = localDay(l.created_time);
+      if (l.client_id) { (out.byClient[l.client_id] = out.byClient[l.client_id] || []).push(l); }
+      else if (!isSgs(l)) { out.unmatched.push(l); }
+    });
+    out.daily.forEach(function (x) { (out.byAcct[x.ad_account_id] = out.byAcct[x.ad_account_id] || []).push(x); });
+    return out;
   }
 
   /* GHL leads: the same person from a Meta lead form gets their GHL pipeline stage; everyone else
@@ -106,28 +116,34 @@
   function statsFor(c, w) {
     w = w || windowDays();
     var accts = c ? (c.meta_ad_account_ids || []) : [];
-    var leads = d.leads.filter(function (l) { return c ? l.client_id === c.id : !l.client_id && !isSgs(l); });
-    var r = leads.filter(function (l) { return between(localDay(l.created_time), w); });
+    var leads = c ? (d.byClient[c.id] || []) : d.unmatched;
+    var r = leads.filter(function (l) { return l._day >= w[0] && l._day <= w[1]; });
     var spend = 0, metaCount = 0, byDay = {};
-    d.daily.forEach(function (x) {
-      if (accts.indexOf(x.ad_account_id) !== -1 && between(x.day, w)) {
+    accts.forEach(function (a) {
+      (d.byAcct[a] || []).forEach(function (x) {
+        if (!between(x.day, w)) { return; }
         spend += Number(x.spend || 0); metaCount += Number(x.leads || 0);
         var b = byDay[x.day] || (byDay[x.day] = { spend: 0, meta: 0 });
         b.spend += Number(x.spend || 0); b.meta += Number(x.leads || 0);
-      }
+      });
     });
     // Meta's count also includes leads from website forms, which aren't listed here.
     var total = Math.max(r.length, metaCount);
     return { all: leads, inRange: r, spend: spend, metaCount: metaCount, total: total, cpl: total && spend ? spend / total : null, byDay: byDay, last: leads[0] ? leads[0].created_time : null };
   }
 
+  var routeGen = 0;
   async function route(hash, container) {
+    var gen = ++routeGen;
     el = container;
     // Client Leads and SGS Leads share element ids; keep only the one on screen in the page.
     ["adLeadsView", "sgsView"].forEach(function (id) { var v = $(id); if (v && v !== container) { v.innerHTML = ""; } });
     el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
     var sgs = /^#sgs/.test(hash);
-    try { await load(sgs); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+    var next;
+    try { next = await load(sgs); } catch (e) { if (gen === routeGen) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; } return; }
+    if (gen !== routeGen) { return; }   // the user moved on while this was loading
+    d = next;
     if (sgs) { drawSgs(); return; }
     var m = String(hash).match(/^#adleads\/([0-9a-f-]{36}|unmatched)/);
     if (m) { drawClient(m[1]); } else { drawList(); }
@@ -175,7 +191,7 @@
         T.toast(bad.length ? bad.map(function (r) { return r.message || "Refresh had a problem"; }).join(" · ") : "Up to date. " + (res[0].message || ""), 7000);
       }
       catch (e) { T.fail(e); }
-      route(again, el);
+      if (location.hash.indexOf(again) === 0) { route(location.hash, again.indexOf("#sgs") === 0 ? $("sgsView") : $("adLeadsView")); }
     };
   }
   function stat(label, value, sub) { return '<div class="stat"><span>' + esc(label) + "</span><b>" + esc(value) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + "</div>"; }
@@ -222,10 +238,11 @@
     var qv = view.q.toLowerCase();
     var list = s.inRange.filter(function (l) {
       if (!qv) { return true; }
-      return [l.name, l.email, l.phone, l.campaign_name, l.ad_name, l.form_name].join(" ").toLowerCase().indexOf(qv) !== -1 ||
-        JSON.stringify(l.fields || []).toLowerCase().indexOf(qv) !== -1;
+      if (l._q === undefined) { l._q = ([l.name, l.email, l.phone, l.campaign_name, l.ad_name, l.form_name].join(" ") + " " + JSON.stringify(l.fields || [])).toLowerCase(); }
+      return l._q.indexOf(qv) !== -1;
     });
-    var week = s.all.filter(function (l) { return localDay(l.created_time) >= ymd(new Date(Date.now() - 6 * 864e5)); }).length;
+    var n0 = new Date(), wk = ymd(new Date(n0.getFullYear(), n0.getMonth(), n0.getDate() - 6));
+    var week = s.all.filter(function (l) { return l._day >= wk; }).length;
 
     el.innerHTML = '<div class="cl-wrap al">' +
       '<a class="back" href="#adleads">← Client Leads</a>' +
@@ -246,13 +263,22 @@
 
     wireRange(function () { drawClient(id); });
     wireSync("#adleads/" + id);
-    $("alQ").oninput = function (e) { view.q = e.target.value; var pos = e.target.selectionStart; drawClient(id); var inp = $("alQ"); inp.focus(); inp.setSelectionRange(pos, pos); };
+    var qt;
+    $("alQ").oninput = function (e) {
+      view.q = e.target.value; clearTimeout(qt);
+      qt = setTimeout(function () { var inp0 = $("alQ"); if (!inp0 || location.hash !== "#adleads/" + id) { return; } var pos = inp0.selectionStart; drawClient(id); var inp = $("alQ"); inp.focus(); inp.setSelectionRange(pos, pos); }, 150);
+    };
     el.querySelectorAll(".al-lead > button.al-sum").forEach(function (b) { b.onclick = function () { b.parentNode.classList.toggle("open"); b.setAttribute("aria-expanded", b.parentNode.classList.contains("open")); }; });
     el.querySelectorAll("[data-assign]").forEach(function (sel) {
       sel.onchange = async function () {
         try {
-          await q(T.sb.from("meta_leads").update({ client_id: sel.value || null }).eq("id", sel.dataset.assign));
-          T.toast("Lead moved"); await load(); drawClient(id);
+          var lid = sel.dataset.assign;
+          if (lid.indexOf("ghl:") === 0) {   // website/funnel lead from GHL
+            await q(T.sb.from("ghl_contacts").update({ client_id: sel.value || null, client_manual: !!sel.value }).eq("id", lid.slice(4)));
+          } else {
+            await q(T.sb.from("meta_leads").update({ client_id: sel.value || null }).eq("id", lid));
+          }
+          T.toast("Lead moved"); d = await load(); drawClient(id);
         } catch (e) { T.fail(e); }
       };
     });
@@ -294,7 +320,7 @@
       return [new Date(l.created_time).toLocaleString("en-US"), l.name, l.phone, l.email, l.campaign_name, l.adset_name, l.ad_name, l.form_name, l.platform]
         .concat(names.map(function (n) { return byName[n] || ""; }));
     });
-    var csv = [head].concat(rows).map(function (r) { return r.map(function (v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(","); }).join("\n");
+    var csv = [head].concat(rows).map(function (r) { return r.map(function (v) { v = String(v == null ? "" : v); if (/^[=+\-@\t\r]/.test(v) && !/^\+?[\d\s().-]+$/.test(v)) { v = "'" + v; } return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(","); }).join("\n");
     save(new Blob([csv], { type: "text/csv" }), (c ? c.business_name : "unmatched").replace(/[^\w]+/g, "-") + "-leads-" + today() + ".csv");
   }
   function save(blob, name) {

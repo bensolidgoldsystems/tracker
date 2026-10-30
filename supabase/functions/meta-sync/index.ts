@@ -56,17 +56,21 @@ async function isTeam(token: string): Promise<boolean> {
   return !error && data === true;
 }
 
+// Tokens never go in error text (errors are stored and shown in Settings).
+const redact = (s: string) => String(s).replace(/access_token=[^&\s"']+/g, "access_token=…");
 async function graph(path: string, params: Record<string, string>, token: string) {
   const u = new URL(path.startsWith("http") ? path : GRAPH + path);
-  if (!path.startsWith("http")) {
-    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
-    u.searchParams.set("access_token", token);
-  }
-  const res = await fetch(u.toString());
+  if (!path.startsWith("http")) for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  // The token goes in the header (paging links from Meta carry their own: use it as-is).
+  const auth = u.searchParams.get("access_token") || token;
+  u.searchParams.delete("access_token");
+  let res: Response;
+  try { res = await fetch(u.toString(), { headers: { Authorization: "Bearer " + auth } }); }
+  catch (e) { throw new Error(redact("Network error calling Meta: " + ((e as Error).message || e))); }
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.error) {
     const e = body.error || {};
-    throw new Error((e.message || ("HTTP " + res.status)) + (e.code ? " (code " + e.code + ")" : ""));
+    throw new Error(redact((e.message || ("HTTP " + res.status)) + (e.code ? " (code " + e.code + ")" : "")));
   }
   return body;
 }
@@ -105,7 +109,7 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
   const { data: lastApi } = await db.from("money_entries").select("entry_date").eq("ad_account_id", acct).eq("source", "meta_api")
     .order("entry_date", { ascending: false }).limit(1);
   const csvCut = lastCsv && lastCsv.length ? lastCsv[0].entry_date : null;
-  let since = csvCut ? addDays(csvCut, 1) : FIRST_DAY;
+  let since = csvCut || FIRST_DAY;
   if (lastApi && lastApi.length) { const s2 = addDays(lastApi[0].entry_date, -7); if (s2 > since) since = s2; }
   const events = await graphAll("/act_" + acct + "/activities", {
     fields: "event_time,event_type,extra_data", since: since, until: ymd(new Date()), limit: "500",
@@ -117,8 +121,9 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
     const cents = Number(x.new_value ?? x.amount ?? x.charge_amount);
     if (!isFinite(cents) || !cents) continue;
     const date = nyDate(ev.event_time);
-    if (csvCut && date <= csvCut) continue;            // already covered by the billing report
     const txn = String(x.transaction_id || x.txn_id || "");
+    // Billing-report rows share the meta:<transaction id> reference, so those dedupe on their own.
+    if (csvCut && date <= csvCut && !txn) continue;
     const card = String(x.payment_method || x.funding_source || x.card || card0 || "");
     rows.push({
       client_id: clientId, category: "ad_spend", month: date.slice(0, 7) + "-01", entry_date: date,
@@ -129,7 +134,7 @@ async function syncCharges(acct: string, clientId: string, token: string, card0:
   }
   // Billing events we couldn't read: surface one so the format can be fixed (shows in Settings).
   const billing = events.filter((e) => e.event_type === "ad_account_billing_charge");
-  const newer = billing.filter((e) => !csvCut || nyDate(e.event_time) > csvCut);
+  const newer = billing.filter((e) => !csvCut || nyDate(e.event_time) >= csvCut);
   if (newer.length && !rows.length) {
     throw new Error("Couldn't read billing charges; sample: " + JSON.stringify(billing[0].extra_data).slice(0, 300));
   }
@@ -225,38 +230,59 @@ function contactOf(fields: any[]) {
 
 // Leads from instant forms on every Page we can read, matched to clients by ad account
 // (or by Page for leads with no ad, e.g. organic or test leads).
-async function syncLeads(token: string, acctClient: Record<string, string>) {
+// quick (the 2-minute job): only ACTIVE forms, and only leads newer than the last one stored
+// (with a 10-minute overlap). The hourly run re-checks every form with a 1-day overlap.
+async function syncLeads(token: string, acctClient: Record<string, string>, quick = false) {
   let added = 0;
   const problems: string[] = [];
   let pages: any[] = [];
   try { pages = await graphAll("/me/accounts", { fields: "id,name,access_token", limit: "100" }, token); }
   catch (e) { return { added, problems: ["pages: " + (e as Error).message] }; }
+  // Newest stored lead per form, and each Page's client, in two queries.
+  const latest: Record<string, string> = {};
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from("meta_form_latest").select("form_id,latest").range(from, from + 999);
+    if (error) throw error;
+    for (const r of data || []) latest[r.form_id] = r.latest;
+    if (!data || data.length < 1000) break;
+  }
+  const pageClients: Record<string, string | null> = {};
+  { const { data } = await db.from("meta_pages").select("page_id,client_id"); for (const r of data || []) pageClients[r.page_id] = r.client_id; }
+  // Ad -> ad account, from what's already stored; Meta is asked only for new ads, 50 at a time.
   const adAcct: Record<string, string> = {};
+  async function accountsFor(adIds: string[]) {
+    const want = [...new Set(adIds.filter((a) => a && adAcct[a] === undefined))];
+    for (let i = 0; i < want.length; i += 25) {
+      const { data } = await db.from("meta_leads").select("ad_id,ad_account_id").in("ad_id", want.slice(i, i + 25)).neq("ad_account_id", "").limit(1000);
+      for (const r of data || []) adAcct[r.ad_id] = r.ad_account_id;
+    }
+    const ask = want.filter((a) => adAcct[a] === undefined);
+    for (let i = 0; i < ask.length; i += 50) {
+      try {
+        const r = await graph("/", { ids: ask.slice(i, i + 50).join(","), fields: "account_id" }, token);
+        for (const id of ask.slice(i, i + 50)) adAcct[id] = String((r[id] && r[id].account_id) || "");
+      } catch (_) { for (const id of ask.slice(i, i + 50)) adAcct[id] = ""; }
+    }
+  }
   for (const pg of pages) {
     const ptoken = pg.access_token || token;
     try {
-      const { data: known } = await db.from("meta_pages").select("client_id").eq("page_id", pg.id).maybeSingle();
-      let pageClient: string | null = (known && known.client_id) || null;
-      const forms = await graphAll("/" + pg.id + "/leadgen_forms", { fields: "id,name,status", limit: "100" }, ptoken);
+      let pageClient: string | null = pageClients[pg.id] || null;
+      let forms = await graphAll("/" + pg.id + "/leadgen_forms", { fields: "id,name,status", limit: "100" }, ptoken);
+      const formCount = forms.length;
+      if (quick) forms = forms.filter((f) => !f.status || f.status === "ACTIVE");
       for (const f of forms) {
-        const { data: last } = await db.from("meta_leads").select("created_time").eq("form_id", f.id).order("created_time", { ascending: false }).limit(1);
         const params: Record<string, string> = { fields: "id,created_time,ad_id,ad_name,adset_name,campaign_name,form_id,field_data,is_organic,platform", limit: "500" };
-        if (last && last.length) {
-          const since = Math.floor(new Date(last[0].created_time).getTime() / 1000) - 86400;
+        if (latest[f.id]) {
+          const since = Math.floor(new Date(latest[f.id]).getTime() / 1000) - (quick ? 600 : 86400);
           params.filtering = JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: since }]);
         }
         const leads = await graphAll("/" + f.id + "/leads", params, ptoken);
         if (!leads.length) continue;
+        await accountsFor(leads.map((l: any) => String(l.ad_id || "")));
         const rows = [];
         for (const l of leads) {
-          let acct = "";
-          if (l.ad_id) {
-            if (adAcct[l.ad_id] === undefined) {
-              try { const ad = await graph("/" + l.ad_id, { fields: "account_id" }, token); adAcct[l.ad_id] = String(ad.account_id || ""); }
-              catch (_) { adAcct[l.ad_id] = ""; }
-            }
-            acct = adAcct[l.ad_id];
-          }
+          const acct = l.ad_id ? adAcct[l.ad_id] || "" : "";
           const client = (acct && acctClient[acct]) || pageClient || null;
           if (!pageClient && acct && acctClient[acct]) pageClient = acctClient[acct];
           const c = contactOf(l.field_data);
@@ -273,7 +299,9 @@ async function syncLeads(token: string, acctClient: Record<string, string>) {
         if (error) throw error;
         added += (ins || []).length;
       }
-      await db.from("meta_pages").upsert({ page_id: String(pg.id), name: pg.name || "", client_id: pageClient, forms: forms.length, last_synced_at: new Date().toISOString(), last_error: "" }, { onConflict: "page_id" });
+      if (!quick || pageClient !== (pageClients[pg.id] || null)) {
+        await db.from("meta_pages").upsert({ page_id: String(pg.id), name: pg.name || "", client_id: pageClient, forms: formCount, last_synced_at: new Date().toISOString(), last_error: "" }, { onConflict: "page_id" });
+      }
     } catch (e) {
       const msg = String((e as Error).message || e).slice(0, 400);
       problems.push((pg.name || pg.id) + ": " + msg);
@@ -286,7 +314,8 @@ async function syncLeads(token: string, acctClient: Record<string, string>) {
 async function runSync(trigger: string, sinceOverride?: string) {
   const token = Deno.env.get("META_ACCESS_TOKEN") || "";
   if (!token) return { ok: false, configured: false, message: "Meta isn't connected yet (META_ACCESS_TOKEN not set)." };
-  const { data: run } = await db.from("meta_sync_runs").insert({ trigger }).select("id").single();
+  const { data: run, error: runErr } = await db.from("meta_sync_runs").insert({ trigger }).select("id").single();
+  if (runErr) return { ok: false, configured: true, message: "Couldn't start the sync: " + runErr.message };
   let rows = 0, accounts = 0;
   const problems: string[] = [];
   try {
@@ -376,10 +405,11 @@ async function runSync(trigger: string, sinceOverride?: string) {
     // 4. Individual leads from instant forms.
     const lr = await syncLeads(token, acctClient);
     const message = (adEvents ? adEvents + " ads on/off change(s). " : "") + (lr.added ? lr.added + " new lead(s). " : "") + (lr.problems.length ? "Leads: " + lr.problems.join(" | ").slice(0, 400) + ". " : "") + (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
-    await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok: !problems.length, accounts, rows, message }).eq("id", run?.id);
-    return { ok: !problems.length, configured: true, accounts, rows, message };
+    const ok = !problems.length && !lr.problems.length;
+    await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok, accounts, rows, message }).eq("id", run?.id);
+    return { ok, configured: true, accounts, rows, message };
   } catch (e) {
-    const message = String((e as Error).message || e).slice(0, 900);
+    const message = redact(String((e as Error).message || e)).slice(0, 900);
     await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok: false, accounts, rows, message }).eq("id", run?.id);
     return { ok: false, configured: true, accounts, rows, message };
   }
@@ -437,7 +467,7 @@ Deno.serve(async (req) => {
     const { data: cl } = await db.from("clients").select("id,meta_ad_account_ids");
     const acctClient: Record<string, string> = {};
     for (const c of cl || []) for (const id of c.meta_ad_account_ids || []) if (/^\d+$/.test(id)) acctClient[id] = c.id;
-    const lr = await syncLeads(t, acctClient);
+    const lr = await syncLeads(t, acctClient, true);
     return json(req, 200, { ok: !lr.problems.length, added: lr.added, problems: lr.problems });
   }
   if (body.action === "status") {

@@ -215,12 +215,13 @@
     renderBoard();
   }
 
-  async function saveLead(patch, quiet) {
-    if (!current) { return; }
-    var r = await sb.from("leads").update(patch).eq("id", current.lead.id).select().single();
+  async function saveLead(patch, quiet, leadId) {
+    var id = leadId || (current && current.lead.id);
+    if (!id) { return; }
+    var r = await sb.from("leads").update(patch).eq("id", id).select().single();
     if (r.error) { fail(r.error); return false; }
-    current.lead = Object.assign(current.lead, r.data);
-    var i = leads.findIndex(function (l) { return l.id === current.lead.id; });
+    if (current && current.lead.id === id) { current.lead = Object.assign(current.lead, r.data); }
+    var i = leads.findIndex(function (l) { return l.id === id; });
     if (i !== -1) { leads[i] = Object.assign(leads[i], r.data); }
     if (!quiet) { toast("Saved"); }
     return true;
@@ -298,7 +299,8 @@
   function route() {
     var h = location.hash;
     var m = h.match(/^#lead\/([0-9a-f-]{36})/);
-    if (!m) { current = null; }
+    flushNotes();
+    if (!m) { current = null; openGen++; }
     if (/^#settings/.test(h)) { show("settingsView"); openSettings(); }
     else if (h === "#admin" && myRole === "admin") { show("adminView"); openAdmin(); }
     else if (m) { show("leadView"); openLead(m[1]); }
@@ -309,6 +311,11 @@
     else if (/^#(reports|finance)/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
     else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
     else { show("overviewView"); window.SGSReports.overview($("overviewView")); }
+    // Other pages can change clients (Settings, Finance, Pay per lead): the Clients cache only lives
+    // while moving between client pages.
+    if (!/^#(clients|client\/|partner\/)/.test(h)) { window.SGSClients.invalidate(); }
+    // Overview and Finance share loaded money data; any other page may change it.
+    if (!(h === "" || h === "#" || /^#(overview|finance|reports)/.test(h))) { window.SGSReports.invalidate(); }
     window.scrollTo(0, 0);
   }
   window.addEventListener("hashchange", function () { if (!$("appView").classList.contains("hidden")) { route(); } });
@@ -477,26 +484,32 @@
   }
 
   /* ---------- lead detail ---------- */
+  var openGen = 0;
   async function openLead(id) {
+    var gen = ++openGen;
     $("boardView").classList.add("hidden");
     var view = $("leadView");
     view.classList.remove("hidden");
     view.innerHTML = '<a class="back" href="#leads">← Website leads</a><p class="muted">Loading...</p>';
-    var r = await sb.from("leads").select("*").eq("id", id).single();
+    var res = await Promise.all([sb.from("leads").select("*").eq("id", id).single(), sb.from("lead_files").select("*").eq("lead_id", id).order("kind").order("path")]);
+    if (gen !== openGen) { return; }
+    var r = res[0], f = res[1];
     if (r.error) { view.innerHTML = '<a class="back" href="#leads">← Website leads</a><p class="muted">Lead not found.</p>'; return; }
-    var f = await sb.from("lead_files").select("*").eq("lead_id", id).order("kind").order("path");
-    current = { lead: r.data, files: f.data || [], urls: {} };
-    await signUrls();
+    var next = { lead: r.data, files: f.data || [], urls: {} };
+    await signUrls(next);
+    if (gen !== openGen) { return; }
+    current = next;
     renderLead();
     window.scrollTo(0, 0);
   }
 
-  async function signUrls() {
-    var paths = current.files.map(function (f) { return f.path; });
-    current.urls = {};
+  async function signUrls(target) {
+    target = target || current;
+    var paths = target.files.map(function (f) { return f.path; });
+    target.urls = {};
     if (!paths.length) { return; }
     var r = await bucket.createSignedUrls(paths, 3600);
-    (r.data || []).forEach(function (x) { if (x.signedUrl) { current.urls[x.path] = x.signedUrl; } });
+    (r.data || []).forEach(function (x) { if (x.signedUrl) { target.urls[x.path] = x.signedUrl; } });
   }
 
   function renderLead() {
@@ -622,10 +635,10 @@
     }
     var cl = Object.assign({}, current.lead.checklist || {});
     cl.banner = "done";
-    await saveLead({ checklist: cl }, true);
+    await saveLead({ checklist: cl }, true, id);
     toast("Banner saved");
     await loadLeads();
-    openLead(id);
+    if (location.hash === "#lead/" + id) { openLead(id); }
   }
 
   function checklistPanel(cs) {
@@ -649,8 +662,7 @@
     $("mStart").addEventListener("change", function (e) { saveLead({ start_date: e.target.value || null }); });
     $("mLaunch").addEventListener("change", function (e) { saveLead({ launch_date: e.target.value || null }); });
     $("mDraft").addEventListener("change", function (e) { saveLead({ draft_url: e.target.value.trim() }); });
-    var nt;
-    $("mNotes").addEventListener("input", function (e) { clearTimeout(nt); nt = setTimeout(function () { saveLead({ internal_notes: e.target.value }, true); }, 700); });
+    wireNotes();
     $("exportBtn").addEventListener("click", exportZip);
     $("editBtn").addEventListener("click", editInfo);
     $("moreBtn").addEventListener("click", moreMenu);
@@ -672,10 +684,14 @@
     wireBanner();
   }
 
+  var checklistChain = Promise.resolve();
   async function setChecklist(id, state) {
+    var leadId = current.lead.id;
     var cl = Object.assign({}, current.lead.checklist || {});
     if (state) { cl[id] = state; } else { delete cl[id]; }
-    var ok = await saveLead({ checklist: cl }, true);
+    current.lead.checklist = cl;            // the next click builds on this one
+    var ok = await (checklistChain = checklistChain.then(function () { return saveLead({ checklist: cl }, true, leadId); }));
+    if (!current || current.lead.id !== leadId) { return; }
     if (ok) {
       var side = document.querySelector(".side");
       var notes = $("mNotes").value;
@@ -690,8 +706,22 @@
     var l = current.lead, side = document.querySelector(".side");
     side.querySelectorAll("[data-cl]").forEach(function (cb) { cb.addEventListener("change", function () { setChecklist(cb.dataset.cl, cb.checked ? "done" : ""); }); });
     side.querySelectorAll("[data-na]").forEach(function (b) { b.addEventListener("click", function () { var id = b.dataset.na; setChecklist(id, (l.checklist || {})[id] === "na" ? "" : "na"); }); });
-    var nt;
-    $("mNotes").addEventListener("input", function (e) { clearTimeout(nt); nt = setTimeout(function () { saveLead({ internal_notes: e.target.value }, true); }, 700); });
+    wireNotes();
+  }
+  // Notes save 0.7s after typing stops, always to the lead they were typed on (and right away when leaving it).
+  var pendingNotes = null;
+  function flushNotes() {
+    if (!pendingNotes) { return; }
+    var p = pendingNotes; pendingNotes = null; clearTimeout(p.timer);
+    saveLead({ internal_notes: p.text }, true, p.id);
+  }
+  function wireNotes() {
+    var id = current.lead.id;
+    $("mNotes").addEventListener("input", function (e) {
+      if (pendingNotes && pendingNotes.id !== id) { flushNotes(); }
+      if (pendingNotes) { clearTimeout(pendingNotes.timer); }
+      pendingNotes = { id: id, text: e.target.value, timer: setTimeout(flushNotes, 700) };
+    });
   }
 
   /* ---------- uploads from the Tracker (full quality, straight to storage) ---------- */
@@ -714,7 +744,7 @@
       if (ins.error) { fail(ins.error); return; }
     }
     toast(n + " file(s) added");
-    openLead(id);
+    if (location.hash === "#lead/" + id) { openLead(id); }
     var l = leads.filter(function (x) { return x.id === id; })[0];
     if (l) { l.lead_files = (l.lead_files || []).concat(rows.map(function (r) { return { kind: r.kind }; })); }
   }
@@ -754,9 +784,10 @@
     if (r.error) { fail(r.error); return; }
     var d = await sb.from("lead_files").delete().in("id", list.map(function (f) { return f.id; }));
     if (d.error) { fail(d.error); return; }
+    var leadId = list[0].lead_id || (current && current.lead.id);
     toast("Deleted " + list.length + " file(s)");
     await loadLeads();
-    openLead(current.lead.id);
+    if (leadId && location.hash === "#lead/" + leadId) { openLead(leadId); }
   }
 
   /* ---------- more menu ---------- */
@@ -788,7 +819,10 @@
 
   /* ---------- edit info ---------- */
   function editInfo() {
-    var a = current.lead.answers || {};
+    var l0 = current.lead;
+    // Short-form and hand-added leads keep contact details in their own columns: start from those.
+    var a = Object.assign({ business_name: l0.business_name || undefined, contact_name: l0.contact_name || undefined, contact_email: l0.email || undefined, business_phone: l0.phone || undefined }, l0.answers || {});
+    Object.keys(a).forEach(function (k) { if (a[k] === undefined) { delete a[k]; } });
     var html = "<h2>Edit info</h2>" + S.SECTIONS.map(function (sec) {
       var fields = sec.fields.filter(function (f) { return f.type !== "note" && f.type !== "files"; });
       return "<h3>" + sec.num + " " + esc(sec.title) + '</h3><div class="mgrid">' + fields.map(function (f) {
@@ -822,11 +856,11 @@
       });
       var ok = await saveLead({
         answers: next,
-        business_name: next.business_name || "",
-        contact_name: next.contact_name || "",
-        email: next.contact_email || "",
-        phone: next.business_phone || ""
-      });
+        business_name: next.business_name || l0.business_name || "",
+        contact_name: next.contact_name || l0.contact_name || "",
+        email: next.contact_email || l0.email || "",
+        phone: next.business_phone || l0.phone || ""
+      }, false, l0.id);
       if (ok) { closeModal(); renderLead(); }
     };
   }
@@ -934,6 +968,8 @@
   /* ---------- start ---------- */
   sb.auth.onAuthStateChange(function (event) {
     if (event === "PASSWORD_RECOVERY") { LINK_TYPE = "recovery"; gate(); }
+    // Signed out in another tab: leave the app here too.
+    if (event === "SIGNED_OUT" && appOpen()) { myRole = null; leads = []; location.hash = ""; showAuth("Signed out."); }
   });
   gate();
 })();

@@ -68,7 +68,7 @@ async function adAccounts(adIds: string[]): Promise<Record<string, string>> {
   for (const id of want) {
     if (map[id] || !token) continue;
     try {
-      const r = await fetch(GRAPH + "/" + id + "?fields=account_id&access_token=" + encodeURIComponent(token));
+      const r = await fetch(GRAPH + "/" + id + "?fields=account_id", { headers: { Authorization: "Bearer " + token } });
       const b = await r.json();
       if (b && b.account_id) map[id] = String(b.account_id);
     } catch (_) { /* unknown ad */ }
@@ -146,9 +146,14 @@ async function runSync(full: boolean) {
       for (const r of fl || []) { if (r.form_name) byForm[r.form_name] = r.client_id; if (r.form_id) byForm[r.form_id] = r.client_id; }
       if (!fl || fl.length < 1000) break;
     }
-    const { data: known } = await db.from("ghl_contacts").select("id,client_id,is_sgs").in("id", contacts.map((c) => c.id).slice(0, 5000));
+    // What's already stored (in chunks: a long id list doesn't fit in one request URL).
     const kept: Record<string, any> = {};
-    for (const k of known || []) kept[k.id] = k;
+    const ids = contacts.map((c) => c.id);
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data: known, error } = await db.from("ghl_contacts").select("id,client_id,is_sgs,client_manual").in("id", ids.slice(i, i + 200));
+      if (error) throw error;
+      for (const k of known || []) kept[k.id] = k;
+    }
 
     const rows: any[] = [];
     contacts.forEach((c, i) => {
@@ -168,7 +173,8 @@ async function runSync(full: boolean) {
       if (!clientId && !sgs) clientId = byForm[formId] || byForm[formName] || null;
       if (!clientId && !sgs && pipeline) clientId = byPipeline(pipeline);
       const k = kept[c.id];
-      if (k && (k.client_id || k.is_sgs) && !clientId && !sgs) { clientId = k.client_id; sgs = k.is_sgs; }   // keep hand-made assignments
+      if (k && k.client_manual) { clientId = k.client_id; sgs = k.is_sgs; }   // picked by hand in Tracker: always kept
+      else if (k && (k.client_id || k.is_sgs) && !clientId && !sgs) { clientId = k.client_id; sgs = k.is_sgs; }
       const custom = (c.customFields || []).filter((f: any) => f.value != null && f.value !== "")
         .map((f: any) => ({ name: fieldNames[f.id] || "", values: [Array.isArray(f.value) ? f.value.join(", ") : String(f.value)] }));
       const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.contactName || "";

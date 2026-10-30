@@ -62,9 +62,13 @@
     return clientServices(client.id).filter(function (x) { return x.status === "active" && x.billing_type === "per_lead"; });
   }
   // Ads on/off: Meta-detected dates win over hand-entered ones (see adstate.js).
+  var memo = {};
   function adEvents(clientId, includeFuture) { return window.SGSAds.events(data.events, clientId, includeFuture); }
   function adsLiveSince(clientId) { return window.SGSAds.liveSince(data.events, clientId); }
-  function adsState(clientId) { return window.SGSAds.state(data.events, clientId); }
+  function adsState(clientId) {
+    var k = "st:" + clientId;
+    return k in memo ? memo[k] : (memo[k] = window.SGSAds.state(data.events, clientId));
+  }
   function billCycle(c) {
     if (!clientServices(c.id).some(function (x) { return x.billing_type === "monthly" && x.status !== "ended"; })) { return null; }
     return window.SGSAds.cycle(data.events, c.id);
@@ -94,30 +98,49 @@
   }
 
   /* ---------- data ---------- */
-  async function loadAll() {
+  // PostgREST returns at most 1,000 rows per request: page through.
+  async function all(make) {
+    var out = [];
+    for (var from = 0; from < 100000; from += 1000) {
+      var rows = await q(make().range(from, from + 999));
+      out = out.concat(rows);
+      if (rows.length < 1000) { break; }
+    }
+    return out;
+  }
+  // Loaded data is reused for 30 seconds while moving between client pages; any save reloads it.
+  var loadedAt = 0, CACHE_MS = 30000;
+  async function loadAll(force) {
+    if (!force && Date.now() - loadedAt < CACHE_MS) { return; }
     var res = await Promise.all([
       q(T.sb.from("clients").select("*").order("business_name")),
       q(T.sb.from("services").select("*").order("sort")),
       q(T.sb.from("partners").select("*").order("name")),
-      q(T.sb.from("client_services").select("*").order("created_at")),
-      q(T.sb.from("ad_events").select("*").order("event_date", { ascending: false })),
+      all(function () { return T.sb.from("client_services").select("*").order("created_at").order("id"); }),
+      all(function () { return T.sb.from("ad_events").select("*").order("event_date", { ascending: false }).order("id"); }),
       q(T.sb.from("meta_ad_accounts").select("ad_account_id,delivering,delivering_at")).catch(function () { return []; })
     ]);
     data.clients = res[0]; data.services = res[1]; data.partners = res[2]; data.cs = res[3]; data.events = res[4]; data.accounts = res[5];
+    memo = {}; loadedAt = Date.now();
   }
+  function invalidate() { loadedAt = 0; }
 
   /* ---------- router ---------- */
-  var el = null;
-  async function route(hash, container) {
+  var el = null, routeGen = 0;
+  async function route(hash, container, force) {
+    var gen = ++routeGen;
     el = container;
-    el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
-    try { await loadAll(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
-    var m;
+    if (force || Date.now() - loadedAt >= CACHE_MS) { el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>'; }
+    try { await loadAll(force); } catch (e) { if (gen === routeGen) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; } return; }
+    if (gen !== routeGen || (hash && location.hash !== hash)) { return; }
+    var m = hash.match(/^#(client|partner)\/([0-9a-f-]{36})/);
+    // Just created somewhere else (new client, converted lead): reload once instead of "not found".
+    if (m && !force && !byId(m[1] === "client" ? data.clients : data.partners, m[2])) { return route(hash, container, true); }
     if ((m = hash.match(/^#client\/([0-9a-f-]{36})/))) { renderClient(m[1]); }
     else if ((m = hash.match(/^#partner\/([0-9a-f-]{36})/))) { renderPartner(m[1]); }
     else { renderList(); }
   }
-  function refresh() { route(location.hash, el); }
+  function refresh() { route(location.hash, el, true); }
 
   /* ================= CLIENT LIST ================= */
   function renderList() {
@@ -358,10 +381,11 @@
   var contacts = [];
   async function loadContacts(c) {
     try {
-      contacts = await q(T.sb.from("client_contacts").select("*").eq("client_id", c.id).order("is_primary", { ascending: false }).order("created_at"));
+      var rows = await q(T.sb.from("client_contacts").select("*").eq("client_id", c.id).order("is_primary", { ascending: false }).order("created_at"));
     } catch (e) { T.fail(e); return; }
     var box = $("contactList");
-    if (!box) { return; }
+    if (!box || location.hash.indexOf("#client/" + c.id) !== 0) { return; }
+    contacts = rows;
     box.innerHTML = contacts.length ? contacts.map(function (k) {
       return '<div class="ct">' +
         '<div class="ct-top"><b>' + esc(k.name || "Unnamed") + "</b>" + (k.is_primary ? ' <span class="badge gold">Primary</span>' : "") + (k.role ? ' <span class="muted">' + esc(k.role) + "</span>" : "") +
@@ -469,16 +493,16 @@
     $("esType").onchange = syncPer;
     syncSvc(true);
 
-    if (x) {
-      try {
-        var hist = await q(T.sb.from("client_service_price_history").select("*").eq("client_service_id", x.id).order("changed_at", { ascending: false }).limit(10));
-        if (hist.length && $("esHistory")) {
-          $("esHistory").innerHTML = '<h3>Price history</h3><ul class="hist">' + hist.map(function (h) {
+    if (x) {   // price history fills in when it arrives; the buttons work right away
+      var histBox = $("esHistory");
+      q(T.sb.from("client_service_price_history").select("*").eq("client_service_id", x.id).order("changed_at", { ascending: false }).limit(10)).then(function (hist) {
+        if (hist.length && histBox.isConnected) {
+          histBox.innerHTML = '<h3>Price history</h3><ul class="hist">' + hist.map(function (h) {
             return "<li>" + esc(dateLong(h.changed_at.slice(0, 10))) + ": " + esc(money(h.old_price)) + " " + esc(BILLING[h.old_billing_type] || "") +
               " → <b>" + esc(money(h.new_price)) + " " + esc(BILLING[h.new_billing_type] || "") + "</b>" + (h.changed_by ? ' <span class="muted">by ' + esc(h.changed_by) + "</span>" : "") + "</li>";
           }).join("") + "</ul>";
         }
-      } catch (e) { /* history is a nice-to-have */ }
+      }, function () { /* history is a nice-to-have */ });
     }
 
     $("mCancel").onclick = T.closeModal;
@@ -834,6 +858,7 @@
   window.SGSClients = {
     init: function (helpers) { T = helpers; },
     route: route,
+    invalidate: invalidate,
     renderSettings: renderSettings,
     convertLead: convertLead
   };

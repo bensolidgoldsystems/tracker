@@ -65,10 +65,11 @@ Deno.serve(async (req) => {
   const sessionId = String(decodeJwt(token).session_id || "");
   const { data: vs } = await admin.from("verified_sessions").select("session_id")
     .eq("session_id", /^[0-9a-f-]{36}$/.test(sessionId) ? sessionId : "00000000-0000-0000-0000-000000000000")
-    .eq("user_id", me.user.id).gt("expires_at", new Date().toISOString()).maybeSingle();
+    .eq("user_id", me.user.id).gt("expires_at", new Date().toISOString())
+    .gt("last_seen", new Date(Date.now() - 60 * 60 * 1000).toISOString()).maybeSingle();   // same 1-hour idle rule as the database
   if (!vs) return json(req, 403, { error: "2FA required" });
   const myEmail = me.user.email.toLowerCase();
-  const { data: myRow } = await admin.from("team_members").select("role").ilike("email", myEmail).maybeSingle();
+  const { data: myRow } = await admin.from("team_members").select("role").ilike("email", myEmail.replace(/[\\%_]/g, "\\$&")).maybeSingle();
   if (myRow?.role !== "admin") return json(req, 403, { error: "Admins only" });
 
   let body: any = {};
