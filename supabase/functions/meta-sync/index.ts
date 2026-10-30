@@ -10,7 +10,7 @@
 //     assigned with Leads access and the token to include leads_retrieval, pages_show_list,
 //     pages_read_engagement, pages_manage_ads) -> public.meta_leads, matched to clients by ad account.
 //   - when each client's ads went live / paused -> public.ad_events (source 'meta').
-// Called by pg_cron (x-cron-secret header) and by "Sync now" in Tracker Settings
+// Called by pg_cron (x-cron-secret header; full sync hourly, {action:"leads"} every 2 minutes) and by "Sync now" in Tracker Settings
 // (signed-in team member whose sign-in passed email 2FA).
 // Secrets: META_ACCESS_TOKEN (system user token, ads_read), optional META_API_VERSION.
 // Cron secret: Supabase Vault 'meta_sync_secret' (see supabase/sql/meta-sync.sql).
@@ -429,6 +429,16 @@ Deno.serve(async (req) => {
       } catch (_) { /* keep the last known balance */ }
     }));
     return json(req, 200, { ok: true, at, balances });
+  }
+  // Leads only (every 2 minutes from pg_cron): new instant-form leads, nothing else.
+  if (body.action === "leads") {
+    const t = Deno.env.get("META_ACCESS_TOKEN") || "";
+    if (!t) return json(req, 200, { configured: false });
+    const { data: cl } = await db.from("clients").select("id,meta_ad_account_ids");
+    const acctClient: Record<string, string> = {};
+    for (const c of cl || []) for (const id of c.meta_ad_account_ids || []) if (/^\d+$/.test(id)) acctClient[id] = c.id;
+    const lr = await syncLeads(t, acctClient);
+    return json(req, 200, { ok: !lr.problems.length, added: lr.added, problems: lr.problems });
   }
   if (body.action === "status") {
     return json(req, 200, { configured: !!Deno.env.get("META_ACCESS_TOKEN") });
