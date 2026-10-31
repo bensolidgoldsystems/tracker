@@ -811,8 +811,9 @@
 
     function line(name, v, cls, depth) {
       var tot = 0;
-      var tds = v.map(function (x, j) { tot += x; return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join("");
-      return "<tr class='" + (cls || "pl-l") + "'><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + tds + "<td class='tot'>" + (tot ? money(tot) : "") + "</td></tr>";
+      // Each amount below zero shows red (gross and net profit rows color by sign, month by month).
+      var tds = v.map(function (x, j) { tot += x; var c = (keys[j] === curKey ? "now" : "") + (x < 0 ? " neg" : ""); return "<td" + (c.trim() ? " class='" + c.trim() + "'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join("");
+      return "<tr class='" + (cls || "pl-l") + "'><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + tds + "<td class='tot" + (tot < 0 ? " neg" : "") + "'>" + (tot ? money(tot) : "") + "</td></tr>";
     }
     function head(name, depth) {
       return "<tr class='pl-h'><th class='sticky' style='padding-left:" + (14 + (depth || 0) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>";
