@@ -115,7 +115,7 @@
       cell.font = cell.font && cell.font.bold ? cell.font : { size: 10.5, color: { argb: INK2 } };
       cell.border = { bottom: { style: "hair", color: { argb: LINE } } };
       if (zebra) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAF9F5" } }; }
-      if (!cell.alignment) { cell.alignment = { vertical: "middle", indent: c === 1 ? 1 : 0 }; }
+      if (!cell.alignment) { cell.alignment = (c === 1 ? { vertical: "middle", horizontal: "left", indent: 1 } : { vertical: "middle" }); }
     }
   }
   function totalRow(ws, row, n, label) {
@@ -126,7 +126,7 @@
       cell.font = { bold: true, size: 11, color: { argb: INK } };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GOLD_SOFT } };
       cell.border = { top: { style: "medium", color: { argb: INK } }, bottom: { style: "double", color: { argb: INK } } };
-      cell.alignment = { vertical: "middle", indent: c === 1 ? 1 : 0 };
+      cell.alignment = (c === 1 ? { vertical: "middle", horizontal: "left", indent: 1 } : { vertical: "middle" });
     }
   }
   function money(cell) { cell.numFmt = MONEY; cell.alignment = { vertical: "middle", horizontal: "right" }; }
@@ -229,11 +229,77 @@
     return wb.xlsx.writeBuffer();
   }
 
-  /* ---------- modal ---------- */
-  function open(ctx) {
+  /* ---------- whole Finance page ---------- */
+  var SHEET = { secPnl: "Profit & loss", secSum: "Summary", secRev: "Revenue", secPpl: "Pay per lead", secAds: "Ad spend & prepaid" };
+  async function buildFinance(data, from, to) {
+    var X = window.ExcelJS;
+    var wb = new X.Workbook();
+    wb.creator = "Solid Gold Systems Tracker"; wb.created = new Date(); wb.company = "Solid Gold Systems";
+    var logoId = null;
+    try { logoId = wb.addImage({ buffer: await (await fetch("/assets/logo.png", { cache: "force-cache" })).arrayBuffer(), extension: "png" }); } catch (e) { /* optional */ }
+    var period = from === to ? long(from) : long(from) + " – " + long(to);
+    var sub = period + "  ·  Finance  ·  Generated " + todayLong();
+    var keys = data.keys, used = {};
+    data.sections.forEach(function (sec, si) {
+      var name = (SHEET[sec.id] || sec.title).replace(/[\[\]:*?\/\\]/g, "").slice(0, 31);
+      while (used[name]) { name = name.slice(0, 28) + " " + (++used[name]); }
+      used[name] = 1;
+      var hasStatus = sec.rows.some(function (r) { return r.status; });
+      var first = hasStatus ? 3 : 2, n = first + keys.length;   // columns: name, [status], months..., total
+      var ws = wb.addWorksheet(name, { views: [{ showGridLines: false, state: "frozen", xSplit: 1, ySplit: 7 }], properties: { tabColor: { argb: si === 0 ? GOLD : si % 2 ? INK : GOLD_DIM } },
+        pageSetup: { orientation: keys.length > 4 ? "landscape" : "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } } });
+      var mw = Math.max(13, Math.ceil((hasStatus ? 44 : 56) / keys.length));
+      ws.columns = [{ width: 40 }].concat(hasStatus ? [{ width: 13 }] : []).concat(keys.map(function () { return { width: mw }; })).concat([{ width: 16 }]);
+      banner(ws, logoId, n, sec.title, sub);
+      header(ws, 7, [sec.id === "secPnl" ? "Profit & loss" : sec.id === "secSum" ? "" : "Client"].concat(hasStatus ? ["Status"] : []).concat(keys.map(short)).concat(["Total"]), first);
+      var rr = 8, zebra = 0;
+      sec.rows.forEach(function (r) {
+        var row = ws.getRow(rr);
+        var lab = row.getCell(1); lab.value = r.label;
+        if (hasStatus) { row.getCell(2).value = r.status || null; }
+        r.values.forEach(function (x, j) {
+          var c = row.getCell(first + j);
+          if (x.v != null && x.v !== 0) { c.value = x.v; }
+          if (x.note) { c.note = x.note; }
+        });
+        if (r.kind !== "head" && r.kind !== "group" && r.total != null) { row.getCell(n).value = r.total; }
+        if (r.kind === "total") {
+          var keep = lab.value; totalRow(ws, rr, n, keep);
+        } else if (r.kind === "key") {
+          row.height = 22;
+          for (var c1 = 1; c1 <= n; c1++) { var kc = row.getCell(c1); kc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: INK } }; kc.font = { bold: true, size: 11, color: { argb: GOLD } }; kc.alignment = c1 === 1 ? { vertical: "middle", horizontal: "left", indent: 1 } : { vertical: "middle" }; }
+        } else if (r.kind === "head" || r.kind === "group") {
+          row.height = 20; zebra = 0;
+          for (var c2 = 1; c2 <= n; c2++) {
+            var hc = row.getCell(c2);
+            hc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1EEE4" } };
+            hc.font = { bold: true, size: 10.5, color: { argb: INK } };
+            hc.border = { top: { style: "thin", color: { argb: LINE } } };
+            hc.alignment = c2 === 1 ? { vertical: "middle", horizontal: "left", indent: 1 + (r.indent || 0) } : { vertical: "middle" };
+          }
+          if (r.info) { var ic = row.getCell(first); ic.value = r.info; ic.font = { italic: true, size: 9.5, color: { argb: GREY } }; }
+          if (hasStatus && r.status) { row.getCell(2).font = { size: 9.5, bold: true, color: { argb: r.status === "Active" ? "FF2E7D32" : GREY } }; }
+        } else {
+          bodyRow(ws, rr, n, (zebra++) % 2 === 1);
+          lab.alignment = { vertical: "middle", horizontal: "left", indent: 1 + (r.indent || 0) * 2 };
+          if (r.kind === "ref") { for (var c3 = 1; c3 <= n; c3++) { row.getCell(c3).font = { italic: true, size: 9.5, color: { argb: GREY } }; } }
+          if (hasStatus && r.status) { row.getCell(2).font = { size: 9.5, color: { argb: r.status === "Active" ? "FF2E7D32" : GREY } }; }
+          row.getCell(n).font = { bold: true, size: 10.5, color: { argb: INK } };
+        }
+        for (var c4 = first; c4 <= n; c4++) { money(row.getCell(c4)); }
+        if (r.kind === "group" && r.info) { row.getCell(first).alignment = { vertical: "middle", horizontal: "left" }; }
+        rr++;
+      });
+      if (sec.sub) { note(ws, rr + 1, sec.sub, n); }
+      ws.headerFooter.oddFooter = "&L&8Solid Gold Systems · Finance · " + name + "&R&8Page &P of &N";
+    });
+    return wb.xlsx.writeBuffer();
+  }
+
+  /* ---------- modals ---------- */
+  function rangeModal(ctx, o) {
     var T = ctx.T, $ = T.$;
-    T.modal("<h2>Export ad spend</h2>" +
-      "<p class='muted' style='margin:-8px 0 14px'>An Excel file of the Meta ad charges SGS paid, by month: our own ads and the client ads we pay for, with every charge listed.</p>" +
+    T.modal("<h2>" + o.title + "</h2><p class='muted' style='margin:-8px 0 14px'>" + o.blurb + "</p>" +
       "<div class='g3' style='grid-template-columns:1fr 1fr'><div class='fld'><label for='exFrom'>From</label><input class='inp' type='month' id='exFrom' value='" + ctx.from + "'></div>" +
       "<div class='fld'><label for='exTo'>To</label><input class='inp' type='month' id='exTo' value='" + ctx.to + "'></div></div>" +
       "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='exGo'>Download Excel</button></div>");
@@ -244,17 +310,27 @@
       if (from > to) { var t = from; from = to; to = t; }
       btn.disabled = true; btn.textContent = "Building...";
       try {
-        var res = await Promise.all([loadLib(), gather(ctx, from, to)]);
-        var buf = await build(res[1], from, to);
+        var res = await Promise.all([loadLib(), o.gather(from, to)]);
+        var buf = await o.build(res[1], from, to);
         var a = document.createElement("a");
         a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-        a.download = "SGS-Meta-Ad-Spend_" + from + (to !== from ? "_to_" + to : "") + ".xlsx";
+        a.download = o.file + "_" + from + (to !== from ? "_to_" + to : "") + ".xlsx";
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
-        T.closeModal(); T.toast("Ad spend exported");
+        T.closeModal(); T.toast(o.done);
       } catch (e) { T.fail(e); btn.disabled = false; btn.textContent = "Download Excel"; }
     };
   }
+  function open(ctx) {
+    rangeModal(ctx, { title: "Export ad spend", file: "SGS-Meta-Ad-Spend", done: "Ad spend exported",
+      blurb: "An Excel file of the Meta ad charges SGS paid, by month: our own ads and the client ads we pay for, with every charge listed.",
+      gather: function (f, t) { return gather(ctx, f, t); }, build: build });
+  }
+  function openFinance(ctx) {
+    rangeModal(ctx, { title: "Export Finance", file: "SGS-Finance", done: "Finance exported",
+      blurb: "An Excel file of everything on the Finance page for these months: profit &amp; loss, summary, revenue, pay per lead, ad spend and partner payouts, one sheet each.",
+      gather: ctx.tables, build: buildFinance });
+  }
 
-  window.SGSExport = { open: open, _gather: gather, _build: build, _months: monthsBetween };
+  window.SGSExport = { open: open, openFinance: openFinance, _gather: gather, _build: build, _buildFinance: buildFinance, _months: monthsBetween };
 })();

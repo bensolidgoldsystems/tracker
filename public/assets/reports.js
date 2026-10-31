@@ -521,7 +521,7 @@
     var partnerName = (d.partners[0] || {}).name || "partner";
     el.innerHTML = '<div class="cl-wrap rep">' +
       '<div class="cl-head"><div><h1>Finance</h1><p class="muted">' + esc(y) + ". " + (ro() ? "Click any month to see what's in it." : "Click any month to see or add amounts.") + "</p></div>" +
-        '<div class="cl-actions"><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
+        '<div class="cl-actions"><button class="btn" id="finExportAll" title="Excel file of everything on this page, by month">Export Finance</button><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
       '<div class="fin-range"><div class="seg" role="group" aria-label="Time frame">' + RANGES.map(function (r) {
         return '<button class="seg-b' + (view.range === r[0] ? " on" : "") + '" data-frange="' + r[0] + '">' + r[1] + "</button>";
       }).join("") + "</div>" +
@@ -552,6 +552,7 @@
     });
     el.querySelectorAll("[data-add]").forEach(function (b) { b.onclick = function () { addAmount(b.dataset.add, el); }; });
     $("finExport").onclick = function () { window.SGSExport.open({ d: d, T: T, from: keys[0], to: keys[keys.length - 1] }); };
+    $("finExportAll").onclick = function () { window.SGSExport.openFinance({ T: T, from: keys[0], to: keys[keys.length - 1], tables: financeTables }); };
     el.querySelectorAll("[data-frange]").forEach(function (b) {
       b.onclick = function () {
         if (b.dataset.frange === "custom" && view.range !== "custom") { var ks = rangeKeys(); view.from = ks[0]; view.to = ks[ks.length - 1]; }
@@ -855,6 +856,53 @@
       : (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") + 'Connect QuickBooks in <a href="#settings">Settings</a> to add your other expenses.';
     return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' + note + "</p>" +
       '<div class="sheet-wrap"><table class="sheet pl">' + thead + "<tbody>" + body + "</tbody></table></div></section>";
+  }
+
+  // Everything on the Finance page for a range of months, as plain rows (for the Excel export).
+  // Draws the page off screen with that range and reads the tables, so the file matches the screen.
+  function num(t) {
+    t = String(t || "").replace(/[\s,$]/g, "").replace(/[−–]/g, "-");
+    if (!t || t === "-") { return null; }
+    var neg = /^\(.*\)$/.test(t); t = t.replace(/[()]/g, "");
+    var v = parseFloat(t); return isFinite(v) ? (neg ? -v : v) : null;
+  }
+  async function financeTables(from, to) {
+    await load();
+    var saved = { range: view.range, from: view.from, to: view.to };
+    view.range = "custom"; view.from = from; view.to = to;
+    var box = document.createElement("div");
+    box.style.cssText = "position:absolute;left:-99999px;top:0;width:1200px;visibility:hidden";
+    document.body.appendChild(box);
+    try {
+      drawReports(box);
+      var keys = rangeKeys();
+      var sections = Array.prototype.map.call(box.querySelectorAll("section.rep-sec"), function (sec) {
+        var sub = sec.querySelector(".rep-sub");
+        var rows = [];
+        sec.querySelectorAll("tbody tr, tfoot tr").forEach(function (tr) {
+          var th = tr.querySelector("th"), cls = tr.className || "", foot = !!tr.closest("tfoot");
+          var label = th ? th.textContent.trim() : "";
+          var st = tr.querySelector("td.st"), wide = tr.querySelector("td[colspan]");
+          var tds = Array.prototype.filter.call(tr.querySelectorAll("td"), function (td) { return !td.classList.contains("st") && !td.hasAttribute("colspan"); });
+          var kind = /grp-h/.test(cls) ? "group" : /pl-h/.test(cls) ? "head" : /pl-key/.test(cls) ? "key" : foot || /pl-t/.test(cls) ? "total" : /pl-ref/.test(cls) ? "ref" : "line";
+          var pad = th && /padding-left:\s*(\d+)px/.exec(th.getAttribute("style") || "");
+          var depth = pad ? Math.max(0, Math.round((+pad[1] - 14) / 14)) : (kind !== "group" && tr.closest("tbody.grp") ? 1 : 0);
+          var vals = tds.map(function (td) {
+            var c = td.cloneNode(true), small = c.querySelector("small"); if (small) { small.remove(); }
+            var lead = td.querySelector("small"); return { v: num(c.textContent), note: lead && /lead/.test(lead.textContent) ? lead.textContent.trim() : "" };
+          });
+          rows.push({ kind: kind, label: label, indent: depth, status: st ? st.textContent.trim() : "", info: wide ? wide.textContent.trim() : "",
+            values: vals.slice(0, keys.length), total: vals.length > keys.length ? vals[keys.length].v : null });
+        });
+        return { id: sec.id, title: sec.querySelector("h2").textContent.trim(), sub: sub ? sub.textContent.trim() : "", rows: rows };
+      });
+      return { keys: keys, sections: sections };
+    } finally {
+      box.remove();
+      view.range = saved.range; view.from = saved.from; view.to = saved.to;
+      var real = document.getElementById("reportsView");
+      if (real && !real.classList.contains("hidden")) { drawReports(real); }
+    }
   }
 
   async function qboSettings(el) {

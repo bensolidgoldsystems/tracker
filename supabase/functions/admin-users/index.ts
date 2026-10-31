@@ -130,6 +130,26 @@ Deno.serve(async (req) => {
       return json(req, 200, { ok: true, emailed: false, link: gl.data.properties.action_link, note: "They already have an account; share this sign-in link." });
     }
 
+    // Send the invitation email again. Someone who never signed in gets a fresh invite (their unused
+    // account is recreated, nothing is attached to it yet); someone with an account gets a sign-in link.
+    if (action === "resend") {
+      const u = await findUser(email);
+      if (!u || !u.last_sign_in_at) {
+        if (u) { const del = await admin.auth.admin.deleteUser(u.id); if (del.error) throw del.error; }
+        const { error } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo: TRACKER_URL });
+        if (!error) return json(req, 200, { ok: true, emailed: true });
+        const gl = await admin.auth.admin.generateLink({ type: "invite", email, options: { redirectTo: TRACKER_URL } });
+        if (gl.error) throw gl.error;
+        return json(req, 200, { ok: true, emailed: false, link: gl.data.properties.action_link, note: error.message });
+      }
+      const anon = createClient(url, Deno.env.get("SUPABASE_ANON_KEY") || "", { auth: { persistSession: false } });
+      const { error } = await anon.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: TRACKER_URL } });
+      if (!error) return json(req, 200, { ok: true, emailed: true });
+      const gl = await admin.auth.admin.generateLink({ type: "magiclink", email, options: { redirectTo: TRACKER_URL } });
+      if (gl.error) throw gl.error;
+      return json(req, 200, { ok: true, emailed: false, link: gl.data.properties.action_link, note: error.message });
+    }
+
     if (action === "link") {
       const u = await findUser(email);
       const gl = await admin.auth.admin.generateLink({ type: u ? "magiclink" : "invite", email, options: { redirectTo: TRACKER_URL } });

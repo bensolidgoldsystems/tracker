@@ -485,7 +485,7 @@
           '<option value="member"' + (u.role === "member" ? " selected" : "") + '>Member</option><option value="admin"' + (u.role === "admin" ? " selected" : "") + ">Admin</option></select>" +
           '<div class="team-actions">' +
           (u.role !== "admin" ? '<button class="btn sm" data-act="access">Access</button>' : "") +
-          (u.status !== "active" ? '<button class="btn sm" data-act="link">Copy invite link</button>' : "") +
+          (u.status !== "active" ? '<button class="btn sm gold" data-act="resend">Resend invite</button><button class="btn sm" data-act="link">Copy invite link</button>' : "") +
           (u.status === "active" && !u.is_me ? '<button class="btn sm ghost" data-act="sign_out" title="They will need a new email code next time">Sign out</button>' : "") +
           (u.is_me ? "" : '<button class="btn sm ghost danger" data-act="remove">Remove</button>') +
           "</div></div>";
@@ -507,6 +507,10 @@
             try {
               var d = await fn("admin-users", { action: act, email: email });
               if (act === "link") { copyText(d.link); toast("Invite link copied. It works once and expires in 24 hours.", 4000); }
+              if (act === "resend") {
+                if (d.emailed) { toast("Invite emailed again to " + email, 4000); }
+                else { copyText(d.link); toast("The email couldn't be sent, so a new invite link was copied. Send it to them yourself.", 6000); }
+              }
               if (act === "sign_out") { toast(email + " signed out"); }
               if (act === "remove") { toast(email + " removed"); loadTeam(); }
             } catch (err) { fail(err); }
