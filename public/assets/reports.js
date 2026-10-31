@@ -80,9 +80,13 @@
       q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5)),
       q(T.sb.from("stripe_sync_runs").select("*").not("finished_at", "is", null).order("started_at", { ascending: false }).limit(1)).catch(function () { return []; }),
       q(T.sb.from("qbo_pnl").select("*").eq("id", 1)).catch(function () { return []; }),
-      q(T.sb.from("meta_leads").select("client_id,created_time").not("voided_at", "is", null)).catch(function () { return []; })
+      q(T.sb.from("meta_leads").select("client_id,created_time").not("voided_at", "is", null)).catch(function () { return []; }),
+      // SGS's own Meta ad spend (its own ad accounts), straight from Meta.
+      all(function () { return T.sb.from("meta_daily").select("day,spend").in("ad_account_id", OWN_ACCTS.length ? OWN_ACCTS : ["none"]).gt("spend", 0).order("day"); }).catch(function () { return []; })
     ]);
     d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null, voided: res[11] };
+    d.ownSpend = {};
+    res[12].forEach(function (r) { var k = ym(r.day); d.ownSpend[k] = (d.ownSpend[k] || 0) + Number(r.spend); });
     index();
     applyLive();
     loadedAt = Date.now();
@@ -779,7 +783,10 @@
   /* Combined profit & loss. Income, client ad spend and Stripe fees come from Tracker (Stripe +
      Meta + what's entered by hand); every other expense comes from QuickBooks. QuickBooks' own
      client ad spend line is left out because Tracker's Meta charges are the source of truth. */
-  var AD_SPEND_QBO = /meta ad spend|client ad spend/i;
+  // Meta charges are taken from Meta (client ad spend, SGS's own ads), so QuickBooks' Meta accounts are
+  // left out however a month's charges were categorized there.
+  var AD_SPEND_QBO = /meta ad spend|client ad spend|^advertising\s*(&|and)\s*marketing$/i;
+  var OWN_ACCTS = ((window.SGS_CONFIG && window.SGS_CONFIG.sgsMeta) || {}).adAccounts || [];
   function pnlSection(y, keys, curKey, lbl) {
     var p = d.pnl;
     var hasQbo = !!(p && p.rows && p.rows.length);
@@ -797,7 +804,8 @@
     var fees = sum("stripe_fee");
     var gross = add(income, neg(add(adSpend, fees)));
 
-    var expRows = [], expTotal = zero;
+    var ownAds = keys.map(function (k) { return Math.round((d.ownSpend[k] || 0) * 100) / 100; });
+    var expRows = [{ name: "SGS's own ads (Meta)", depth: 1, v: ownAds }], expTotal = ownAds.slice();
     if (hasQbo) {
       p.rows.forEach(function (r) {
         if (!/^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") || AD_SPEND_QBO.test(r.name)) { return; }
@@ -828,8 +836,8 @@
       line("Client ad spend (Meta)", adSpend) + line("Stripe fees", fees) +
       line("Total cost of delivery", add(adSpend, fees), "pl-t", 0) +
       key("Gross profit", gross) +
-      head("Expenses (QuickBooks)") +
-      (hasQbo ? expRows.map(function (r) { return r.head ? head(r.name, r.depth) : line(r.name, r.v, "pl-l", r.depth); }).join("") : "") +
+      head("Expenses") +
+      (expRows.length ? expRows.map(function (r) { return r.head ? head(r.name, r.depth) : line(r.name, r.v, "pl-l", r.depth); }).join("") : "") +
       line("Total expenses", expTotal, "pl-t", 0) +
       key("Net profit", net) +
       (hasQbo ? line("For reference: QuickBooks total income", qboIncome, "pl-ref", 0) : "");
@@ -838,7 +846,7 @@
       "<thead><tr><th class='sticky'>Profit &amp; loss</th><th class='st'></th>" + keys.map(function (k) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + lbl(k) + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
     var note = hasQbo ? "Income, client ad spend and Stripe fees come from Tracker. All other expenses come from QuickBooks" + (p.company_name ? " (" + esc(p.company_name) + ")" : "") +
         ", updated every hour" + (p.fetched_at ? ", last " + esc(new Date(p.fetched_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") +
-        ". QuickBooks' own client ad spend line is left out." + (fees.some(Boolean) ? "" : " Stripe fees show once the Stripe key can read balances.")
+        ". All Meta ad spend comes straight from Meta (client ad spend above, SGS's own ads under Expenses), so QuickBooks' Client Meta Ad Spend and Advertising & marketing accounts are left out." + (fees.some(Boolean) ? "" : " Stripe fees show once the Stripe key can read balances.")
       : (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") + 'Connect QuickBooks in <a href="#settings">Settings</a> to add your other expenses.';
     return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' + note + "</p>" +
       '<div class="sheet-wrap"><table class="sheet pl">' + thead + "<tbody>" + body + "</tbody></table></div></section>";
