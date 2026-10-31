@@ -98,7 +98,7 @@
         page_id: "", form_id: "", form_name: g.form_name || g.source || "Website form", ad_id: g.ad_id, ad_name: g.ad_name, adset_name: "",
         campaign_name: g.campaign_name, is_organic: false,
         platform: g.facebook_lead_id ? "fb" : "web", name: g.name, email: g.email, phone: g.phone, fields: fields,
-        stage: g.stage_name, pipeline: g.pipeline_name, fromGhl: true
+        stage: g.stage_name, pipeline: g.pipeline_name, fromGhl: true, voided_at: g.voided_at, void_reason: g.void_reason
       });
     });
     return out.sort(function (a, b) { return a.created_time < b.created_time ? 1 : a.created_time > b.created_time ? -1 : 0; });
@@ -117,7 +117,8 @@
     w = w || windowDays();
     var accts = c ? (c.meta_ad_account_ids || []) : [];
     var leads = c ? (d.byClient[c.id] || []) : d.unmatched;
-    var r = leads.filter(function (l) { return l._day >= w[0] && l._day <= w[1]; });
+    var listed = leads.filter(function (l) { return l._day >= w[0] && l._day <= w[1]; });
+    var r = listed.filter(function (l) { return !l.voided_at; });   // voided leads are listed but not counted
     var spend = 0, metaCount = 0, byDay = {};
     accts.forEach(function (a) {
       (d.byAcct[a] || []).forEach(function (x) {
@@ -127,9 +128,10 @@
         b.spend += Number(x.spend || 0); b.meta += Number(x.leads || 0);
       });
     });
-    // Meta's count also includes leads from website forms, which aren't listed here.
+    // Meta's count also includes leads from website forms, which aren't listed here; voided leads come off it.
+    metaCount = Math.max(0, metaCount - (listed.length - r.length));
     var total = Math.max(r.length, metaCount);
-    return { all: leads, inRange: r, spend: spend, metaCount: metaCount, total: total, cpl: total && spend ? spend / total : null, byDay: byDay, last: leads[0] ? leads[0].created_time : null };
+    return { all: leads, listed: listed, inRange: r, spend: spend, metaCount: metaCount, total: total, cpl: total && spend ? spend / total : null, byDay: byDay, last: leads[0] ? leads[0].created_time : null };
   }
 
   var routeGen = 0;
@@ -215,7 +217,7 @@
         stat("Clients with leads", rows.filter(function (x) { return x.s.total; }).length, "") +
       "</div>" +
       (!d.leads.length ? '<div class="hintbox">No individual leads have come through yet. Once lead access is turned on for the Meta connection, every instant-form lead shows up here with name, phone, email and answers.</div>' : "") +
-      '<div class="al-table"><div class="al-row al-th"><span>Client</span><span>Leads</span><span>Ad spend</span><span>Cost per lead</span><span>Last lead</span></div>' +
+      '<div class="al-table scroll-block"><div class="al-row al-th"><span>Client</span><span>Leads</span><span>Ad spend</span><span>Cost per lead</span><span>Last lead</span></div>' +
       rows.map(function (x) {
         return '<a class="al-row" href="#adleads/' + x.c.id + '"><span class="al-name"><b>' + esc(x.c.business_name) + "</b><small>" + esc(x.c.status) + "</small></span>" +
           '<span class="al-n' + (x.s.total ? "" : " zero") + '">' + x.s.total + (x.s.metaCount > x.s.inRange.length ? '<small title="Meta counted more leads than came through instant forms (website forms)">' + x.s.inRange.length + " listed</small>" : "") + "</span>" +
@@ -236,13 +238,13 @@
     if (id !== "unmatched" && !c) { el.innerHTML = '<div class="cl-wrap"><a class="back" href="#adleads">← Client Leads</a><p class="muted">Client not found.</p></div>'; return; }
     var s = statsFor(c);
     var qv = view.q.toLowerCase();
-    var list = s.inRange.filter(function (l) {
+    var list = s.listed.filter(function (l) {
       if (!qv) { return true; }
       if (l._q === undefined) { l._q = ([l.name, l.email, l.phone, l.campaign_name, l.ad_name, l.form_name].join(" ") + " " + JSON.stringify(l.fields || [])).toLowerCase(); }
       return l._q.indexOf(qv) !== -1;
     });
     var n0 = new Date(), wk = ymd(new Date(n0.getFullYear(), n0.getMonth(), n0.getDate() - 6));
-    var week = s.all.filter(function (l) { return l._day >= wk; }).length;
+    var week = s.all.filter(function (l) { return l._day >= wk && !l.voided_at; }).length;
 
     el.innerHTML = '<div class="cl-wrap al">' +
       '<a class="back" href="#adleads">← Client Leads</a>' +
@@ -257,12 +259,13 @@
       '<div class="board-bar al-bar"><input class="inp search" id="alQ" type="search" placeholder="Search name, phone, email, answers..." value="' + esc(view.q) + '" aria-label="Search leads">' +
         '<span class="spacer"></span><button class="btn sm" id="alCsv"' + (list.length ? "" : " disabled") + ">Download CSV</button>" +
         (c ? '<button class="btn sm gold" id="alPdf">Client report (PDF)</button>' : "") + "</div>" +
-      '<div class="al-leads">' + (list.length ? list.map(function (l) { return leadRow(l, !c); }).join("") :
+      '<div class="al-leads scroll-block">' + (list.length ? list.map(function (l) { return leadRow(l, !c); }).join("") :
         '<p class="muted" style="padding:18px">' + (s.all.length ? "No leads match." : "No leads yet in this range.") + "</p>") + "</div>" +
       syncNote() + "</div>";
 
     wireRange(function () { drawClient(id); });
     wireSync("#adleads/" + id);
+    wireVoids(function () { drawClient(id); });
     var qt;
     $("alQ").oninput = function (e) {
       view.q = e.target.value; clearTimeout(qt);
@@ -291,15 +294,16 @@
       return "<dt>" + esc(prettyField(f.name)) + "</dt><dd>" + esc((f.values || []).join(", ")) + "</dd>";
     }).join("");
     var tel = (l.phone || "").replace(/[^\d+]/g, "");
-    return '<div class="al-lead">' +
+    return '<div class="al-lead' + (l.voided_at ? " voided" : "") + '">' +
       '<button type="button" class="al-sum" aria-expanded="false">' +
         '<span class="al-when">' + esc(when(l.created_time)) + "</span>" +
-        '<span class="al-who"><b>' + esc(l.name || "No name") + (l.stage ? ' <em class="al-stage st-' + stageClass(l.stage) + '">' + esc(l.stage) + "</em>" : "") + "</b><small>" + esc([phone(l.phone), l.email].filter(Boolean).join(" · ")) + "</small></span>" +
+        '<span class="al-who"><b>' + esc(l.name || "No name") + (l.voided_at ? ' <em class="al-stage st-lost">Voided' + (l.void_reason ? " · " + esc(l.void_reason) : "") + "</em>" : "") + (l.stage ? ' <em class="al-stage st-' + stageClass(l.stage) + '">' + esc(l.stage) + "</em>" : "") + "</b><small>" + esc([phone(l.phone), l.email].filter(Boolean).join(" · ")) + "</small></span>" +
         '<span class="al-src">' + esc(l.campaign_name || (l.is_organic ? "Organic" : l.form_name || "")) + "<small>" + esc(l.ad_name || l.form_name || "") + "</small></span>" +
         '<span class="al-chev" aria-hidden="true">▾</span></button>' +
       '<div class="al-detail">' +
         '<div class="al-actions">' + (tel ? '<a class="btn sm" href="tel:' + esc(tel) + '">Call</a><a class="btn sm" href="sms:' + esc(tel) + '">Text</a>' : "") +
           (l.email ? '<a class="btn sm" href="mailto:' + esc(l.email) + '">Email</a>' : "") +
+          (l.voided_at ? '<button class="btn sm ghost" data-lunvoid="' + esc(l.id) + '">Undo void</button>' : '<button class="btn sm ghost" data-lvoid="' + esc(l.id) + '">Void lead</button>') +
           (unmatched ? '<select class="inp al-assign" data-assign="' + esc(l.id) + '" aria-label="Client for this lead"><option value="">Pick the client...</option>' +
             d.clients.map(function (c) { return '<option value="' + c.id + '">' + esc(c.business_name) + "</option>"; }).join("") + "</select>" : "") + "</div>" +
         '<dl class="kv al-fields">' + fields +
@@ -308,6 +312,34 @@
           (l.adset_name ? "<dt>Ad set</dt><dd>" + esc(l.adset_name) + "</dd>" : "") +
           (l.platform ? "<dt>Platform</dt><dd>" + esc(platformName(l.platform)) + "</dd>" : "") +
           (l.fromGhl ? "" : "<dt>Meta lead ID</dt><dd>" + esc(l.id) + "</dd>") + "</dl></div></div>";
+  }
+  /* Void / undo a lead (not billed, not counted). Same columns the Pay per lead tab uses. */
+  function wireVoids(redraw) {
+    async function set(id, reason) {
+      var me = await T.sb.auth.getUser();
+      var patch = reason ? { voided_at: new Date().toISOString(), void_reason: reason, voided_by: (me.data && me.data.user && me.data.user.email) || "" } : { voided_at: null, void_reason: "", voided_by: "" };
+      var ghl = id.indexOf("ghl:") === 0;
+      await q(T.sb.from(ghl ? "ghl_contacts" : "meta_leads").update(patch).eq("id", ghl ? id.slice(4) : id));
+      d = await load(/^#sgs/.test(location.hash)); redraw();
+    }
+    el.querySelectorAll("[data-lvoid]").forEach(function (b) {
+      b.onclick = function () {
+        var id = b.dataset.lvoid;
+        T.modal("<h2>Void lead</h2><p class='muted' style='font-size:14px'>It stays listed, marked Voided, but isn't counted or billed.</p>" +
+          "<div class='fld'><label for='vdWhy'>Reason</label><select class='inp' id='vdWhy'>" + ["Invalid number", "Duplicate", "Spam or test", "Outside service area", "Other"].map(function (r) { return "<option>" + esc(r) + "</option>"; }).join("") + "</select></div>" +
+          "<div class='fld' style='margin-top:10px'><label for='vdNote'>Note <span class='opt'>optional</span></label><input class='inp' id='vdNote'></div>" +
+          "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Void lead</button></div>");
+        $("mCancel").onclick = T.closeModal;
+        $("mSave").onclick = function () {
+          var btn = $("mSave"); if (btn.disabled) { return; } btn.disabled = true;
+          var note = $("vdNote").value.trim();
+          set(id, $("vdWhy").value + (note ? ": " + note : "")).then(function () { T.closeModal(); T.toast("Lead voided"); }, function (e) { btn.disabled = false; T.fail(e); });
+        };
+      };
+    });
+    el.querySelectorAll("[data-lunvoid]").forEach(function (b) {
+      b.onclick = function () { b.disabled = true; set(b.dataset.lunvoid, null).then(function () { T.toast("Void undone"); }, function (e) { b.disabled = false; T.fail(e); }); };
+    });
   }
   function platformName(p) { return p === "ig" ? "Instagram" : p === "fb" ? "Facebook" : p === "web" ? "Website" : p || ""; }
 
@@ -557,7 +589,8 @@
   /* ---------- SGS's own leads and ad spend (#sgs) ---------- */
   function drawSgs() {
     var w = windowDays();
-    var leads = d.leads.filter(function (l) { return isSgs(l) && between(localDay(l.created_time), w); });
+    var leadsAll = d.leads.filter(function (l) { return isSgs(l) && between(localDay(l.created_time), w); });
+    var leads = leadsAll.filter(function (l) { return !l.voided_at; });   // voided: listed, not counted
     var spend = 0, metaLeads = 0, byDay = {};
     d.daily.forEach(function (x) {
       if (SGS.adAccounts.indexOf(x.ad_account_id) !== -1 && between(x.day, w)) {
@@ -596,7 +629,7 @@
     var best = list.filter(function (r) { return r.cpl != null && r.leads >= 2; }).sort(sorts.cpl)[0];
 
     var qv = view.q.toLowerCase();
-    var shown = leads.filter(function (l) {
+    var shown = leadsAll.filter(function (l) {
       return !qv || [l.name, l.email, l.phone, l.campaign_name, l.adset_name, l.ad_name, l.form_name].join(" ").toLowerCase().indexOf(qv) !== -1 || JSON.stringify(l.fields || []).toLowerCase().indexOf(qv) !== -1;
     });
     var seg = function (key, opts, cur) {
@@ -615,7 +648,7 @@
       sgsChart(w, byDay) +
       '<div class="al-sec"><h2>What\'s working</h2>' + seg("by", [["campaign", "Campaigns"], ["adset", "Ad sets"], ["ad", "Ads"]], by) +
         '<span class="spacer"></span>' + seg("sort", [["spend", "Most spend"], ["leads", "Most leads"], ["cpl", "Cheapest lead"]], sgsView.sort) + "</div>" +
-      '<div class="al-table sg-table"><div class="al-row sg-row al-th"><span>' + { campaign: "Campaign", adset: "Ad set", ad: "Ad" }[by] + "</span><span>Spend</span><span>Leads</span><span>Cost per lead</span><span>Booked</span><span>Clicks</span><span>CTR</span></div>" +
+      '<div class="al-table sg-table scroll-block"><div class="al-row sg-row al-th"><span>' + { campaign: "Campaign", adset: "Ad set", ad: "Ad" }[by] + "</span><span>Spend</span><span>Leads</span><span>Cost per lead</span><span>Booked</span><span>Clicks</span><span>CTR</span></div>" +
         (list.length ? list.map(function (r) {
           return '<div class="al-row sg-row"><span class="al-name"><b>' + esc(r.name) + "</b>" + (r.parent ? "<small>" + esc(r.parent) + "</small>" : "") + "</span>" +
             "<span>" + money2(r.spend) + '</span><span class="al-n' + (r.leads ? "" : " zero") + '">' + r.leads + "</span>" +
@@ -627,12 +660,13 @@
       '<div class="al-sec"><h2>Leads (' + leads.length + ")</h2></div>" +
       '<div class="board-bar al-bar"><input class="inp search" id="alQ" type="search" placeholder="Search name, phone, email, campaign, ad..." value="' + esc(view.q) + '" aria-label="Search leads">' +
         '<span class="spacer"></span><button class="btn sm" id="alCsv"' + (shown.length ? "" : " disabled") + ">Download CSV</button></div>" +
-      '<div class="al-leads">' + (shown.length ? shown.map(function (l) { return leadRow(l, false); }).join("") :
+      '<div class="al-leads scroll-block">' + (shown.length ? shown.map(function (l) { return leadRow(l, false); }).join("") :
         '<p class="muted" style="padding:18px">' + (leads.length ? "No leads match." : "No form leads in these dates.") + "</p>") + "</div>" +
       syncNote() + "</div>";
 
     wireRange(drawSgs);
     wireSync("#sgs");
+    wireVoids(drawSgs);
     el.querySelectorAll("[data-by]").forEach(function (b) { b.onclick = function () { sgsView.by = b.dataset.by; drawSgs(); }; });
     el.querySelectorAll("[data-sort]").forEach(function (b) { b.onclick = function () { sgsView.sort = b.dataset.sort; drawSgs(); }; });
     $("alQ").oninput = function (e) { view.q = e.target.value; var pos = e.target.selectionStart; drawSgs(); var inp = $("alQ"); inp.focus(); inp.setSelectionRange(pos, pos); };

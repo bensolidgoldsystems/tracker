@@ -79,9 +79,10 @@
       q(T.sb.from("meta_ad_accounts").select("*").order("name")),
       q(T.sb.from("meta_sync_runs").select("*").order("started_at", { ascending: false }).limit(5)),
       q(T.sb.from("stripe_sync_runs").select("*").not("finished_at", "is", null).order("started_at", { ascending: false }).limit(1)).catch(function () { return []; }),
-      q(T.sb.from("qbo_pnl").select("*").eq("id", 1)).catch(function () { return []; })
+      q(T.sb.from("qbo_pnl").select("*").eq("id", 1)).catch(function () { return []; }),
+      q(T.sb.from("meta_leads").select("client_id,created_time").not("voided_at", "is", null)).catch(function () { return []; })
     ]);
-    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null };
+    d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null, voided: res[11] };
     index();
     applyLive();
     loadedAt = Date.now();
@@ -111,6 +112,8 @@
       if (!c) { return; }
       if (Number(r.leads)) { add(c.id, ym(r.day), "leads", Number(r.leads)); }
     });
+    // Voided leads don't count (Meta's daily count still includes them).
+    (d.voided || []).forEach(function (l) { if (l.client_id) { var t = new Date(l.created_time); add(l.client_id, t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0"), "leads", -1); } });
     d.cell = cell; d.cutoff = cutoff; d.acctClient = acctClient;
     d.acctById = {}; d.accounts.forEach(function (a) { d.acctById[a.ad_account_id] = a; });
   }
@@ -248,7 +251,7 @@
         kpi("Monthly recurring", money(mrr), current.length + " current clients") +
       "</div>" +
       '<div class="ov-grid"><div>' +
-        '<div class="panel"><h2>Needs attention</h2><ul class="todo" id="ovTodo">' + attention(key, leadsNew) + "</ul></div>" +
+        '<div class="panel"><h2>Needs attention</h2><ul class="todo scroll-block" id="ovTodo">' + attention(key, leadsNew) + "</ul></div>" +
       "</div><aside>" +
         '<div class="panel"><h2>Revenue by month</h2><div class="bars">' + bars.map(function (b) {
           return '<div class="bar" title="' + esc(b.m + ": " + money(b.v) + " revenue, " + money(b.net) + " net") + '"><small>' + esc(b.v ? "$" + (b.v >= 1000 ? (b.v / 1000).toFixed(1) + "k" : Math.round(b.v)) : "") + '</small><i style="height:' + Math.max(2, Math.round(b.v / max * 82)) + '%"></i><span>' + esc(b.m) + "</span></div>";

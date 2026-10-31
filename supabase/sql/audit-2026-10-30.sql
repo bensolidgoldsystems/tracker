@@ -51,3 +51,13 @@ revoke all on public.meta_form_latest from anon, authenticated;
 --   url:='https://hipuhixrfabjnbtwrldn.supabase.co/functions/v1/meta-sync',
 --   headers:=jsonb_build_object('Content-Type','application/json','x-cron-secret',public.meta_sync_secret()),
 --   body:='{"action":"leads"}'::jsonb, timeout_milliseconds:=120000)$$);
+
+-- Pay per lead investment & voided leads (Oct 31 2026, migration ppl_breakeven_and_void_leads).
+alter table public.clients
+  add column if not exists ppl_shoot_cost numeric not null default 600,
+  add column if not exists ppl_daily_budget numeric not null default 50,
+  add column if not exists ppl_start date;
+alter table public.meta_leads add column if not exists voided_at timestamptz, add column if not exists void_reason text not null default '', add column if not exists voided_by text not null default '';
+alter table public.ghl_contacts add column if not exists voided_at timestamptz, add column if not exists void_reason text not null default '', add column if not exists voided_by text not null default '';
+grant update (voided_at, void_reason, voided_by) on public.meta_leads to authenticated;
+grant update (voided_at, void_reason, voided_by) on public.ghl_contacts to authenticated;
