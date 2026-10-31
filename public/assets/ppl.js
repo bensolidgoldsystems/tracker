@@ -73,12 +73,17 @@
   }
 
   function priceOf(cid) { var s = data.svc.filter(function (x) { return x.client_id === cid; })[0]; return s ? Number(s.price || 0) : 0; }
-  // Meta's daily lead count minus leads voided that day = what can be billed.
+  // Billable leads per day: Meta's daily count minus voided leads, or the leads listed that day if
+  // that's more (Meta's daily totals lag behind the leads themselves by an hour or so).
   function leadsByDay(c) {
-    var accts = c.meta_ad_account_ids || [], out = {};
-    data.daily.forEach(function (r) { if (accts.indexOf(r.ad_account_id) !== -1 && Number(r.leads)) { out[r.day] = (out[r.day] || 0) + Number(r.leads); } });
+    var accts = c.meta_ad_account_ids || [], meta = {}, listed = {}, out = {};
+    data.daily.forEach(function (r) { if (accts.indexOf(r.ad_account_id) !== -1 && Number(r.leads)) { meta[r.day] = (meta[r.day] || 0) + Number(r.leads); } });
+    data.leads.forEach(function (l) { if (!l.voided_at) { listed[l.day] = (listed[l.day] || 0) + 1; } });
     var v = voidsByDay();
-    Object.keys(v).forEach(function (d) { out[d] = Math.max(0, (out[d] || 0) - v[d]); if (!out[d]) { delete out[d]; } });
+    Object.keys(meta).concat(Object.keys(listed)).forEach(function (d) {
+      var n = Math.max((meta[d] || 0) - (v[d] || 0), listed[d] || 0, 0);
+      if (n) { out[d] = n; }
+    });
     return out;
   }
   function voidsByDay() { var v = {}; data.leads.forEach(function (l) { if (l.voided_at) { v[l.day] = (v[l.day] || 0) + 1; } }); return v; }
@@ -238,7 +243,8 @@
     wireLeads(c);
     $("pplSync").onclick = async function () {
       var btn = $("pplSync"); btn.disabled = true; btn.textContent = "Refreshing...";
-      try { var r = await T.fn("meta-sync", {}); T.toast(r.ok ? "Leads refreshed" : (r.message || "Refresh had a problem"), 5000); }
+      // Just the new leads (a few seconds); the full Meta sync runs on its own every hour.
+      try { var r = await T.fn("meta-sync", { action: "leads" }); T.toast(r.added ? r.added + " new lead" + (r.added === 1 ? "" : "s") : "Up to date", 4000); }
       catch (e) { T.fail(e); }
       route("#ppl/" + c.id, el);
     };

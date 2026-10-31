@@ -257,8 +257,9 @@ async function syncLeads(token: string, acctClient: Record<string, string>, quic
     for (const r of data || []) latest[r.form_id] = r.latest;
     if (!data || data.length < 1000) break;
   }
-  const pageClients: Record<string, string | null> = {};
-  { const { data } = await db.from("meta_pages").select("page_id,client_id"); for (const r of data || []) pageClients[r.page_id] = r.client_id; }
+  const pageClients: Record<string, string | null> = {}, pausedUntil: Record<string, string> = {};
+  { const { data } = await db.from("meta_pages").select("page_id,client_id,paused_until"); for (const r of data || []) { pageClients[r.page_id] = r.client_id; if (r.paused_until) pausedUntil[r.page_id] = r.paused_until; } }
+  const nowIso = new Date().toISOString();
   // Ad -> ad account, from what's already stored; Meta is asked only for new ads, 50 at a time.
   const adAcct: Record<string, string> = {};
   async function accountsFor(adIds: string[]) {
@@ -283,11 +284,15 @@ async function syncLeads(token: string, acctClient: Record<string, string>, quic
   }
   for (const pg of pages) {
     const ptoken = pg.access_token || token;
+    // Meta throttled this Page's lead calls recently: leave it alone until the pause ends.
+    if (pausedUntil[pg.id] && pausedUntil[pg.id] > nowIso) continue;
     try {
       let pageClient: string | null = pageClients[pg.id] || null;
       let forms = await graphAll("/" + pg.id + "/leadgen_forms", { fields: "id,name,status", limit: "100" }, ptoken);
       const formCount = forms.length;
-      if (quick) forms = forms.filter((f) => !f.status || f.status === "ACTIVE");
+      // The 2-minute check only looks at active forms that have had leads before; brand-new or
+      // never-used forms are picked up by the hourly run (keeps us under Meta's per-Page limit).
+      if (quick) forms = forms.filter((f) => (!f.status || f.status === "ACTIVE") && latest[f.id]);
       for (const f of forms) {
         const params: Record<string, string> = { fields: "id,created_time,ad_id,ad_name,adset_name,campaign_name,form_id,field_data,is_organic,platform", limit: "500" };
         if (latest[f.id]) {
@@ -321,6 +326,11 @@ async function syncLeads(token: string, acctClient: Record<string, string>, quic
       }
     } catch (e) {
       const msg = String((e as Error).message || e).slice(0, 400);
+      if (/\(code (80005|4|17|32|613)\)/.test(msg)) {
+        // Rate limit: not a failure. Pause this Page for 30 minutes; the other Pages carry on.
+        await db.from("meta_pages").upsert({ page_id: String(pg.id), name: pg.name || "", paused_until: new Date(Date.now() + 30 * 60000).toISOString(), last_error: "Meta rate limit: paused 30 minutes" }, { onConflict: "page_id" });
+        continue;
+      }
       problems.push((pg.name || pg.id) + ": " + msg);
       await db.from("meta_pages").upsert({ page_id: String(pg.id), name: pg.name || "", last_error: msg }, { onConflict: "page_id" });
     }
