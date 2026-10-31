@@ -162,6 +162,13 @@ Deno.serve(async (req) => {
   if (!who) return json(req, 403, { error: "Not allowed" });
   const configured = !!(Deno.env.get("QBO_CLIENT_ID") && Deno.env.get("QBO_CLIENT_SECRET"));
 
+  // Connecting or disconnecting QuickBooks: people who can open Settings and change things.
+  if ((body.action === "start" || body.action === "disconnect") && !fromCron) {
+    const tok = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    const u = createClient(url, Deno.env.get("SUPABASE_ANON_KEY") || "", { auth: { persistSession: false }, global: { headers: { Authorization: "Bearer " + tok } } });
+    const [{ data: see }, { data: write }] = await Promise.all([u.rpc("can_see", { tab: "settings" }), u.rpc("can_write")]);
+    if (see !== true || write !== true) return json(req, 403, { error: "Not allowed" });
+  }
   if (body.action === "start") {
     if (!configured) return json(req, 200, { ok: false, configured: false, error: "Add QBO_CLIENT_ID and QBO_CLIENT_SECRET in Supabase first." });
     const state = crypto.randomUUID();

@@ -96,6 +96,7 @@ Deno.serve(async (req) => {
         const u: any = byEmail.get(r.email.toLowerCase());
         return {
           email: r.email, role: r.role, invited_by: r.invited_by, invited_at: r.invited_at, added_at: r.created_at,
+          tabs: r.tabs || null, read_only: !!r.read_only,
           has_account: !!u,
           status: !u ? "no account" : !u.last_sign_in_at ? "invited" : "active",
           last_sign_in_at: u?.last_sign_in_at || null,
@@ -109,8 +110,11 @@ Deno.serve(async (req) => {
     if (!EMAIL.test(email)) return json(req, 400, { error: "Enter a valid email" });
 
     if (action === "invite") {
+      const TABS = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "leads", "settings"];
+      const tabs = Array.isArray(body.tabs) ? body.tabs.filter((t: string) => TABS.includes(t)) : null;
       const { error: upErr } = await admin.from("team_members").upsert(
-        { email, role, invited_by: myEmail, invited_at: new Date().toISOString() }, { onConflict: "email" });
+        { email, role, invited_by: myEmail, invited_at: new Date().toISOString(), tabs: tabs && tabs.length ? tabs : null, read_only: !!body.read_only },
+        { onConflict: "email" });
       if (upErr) throw upErr;
       const existing = await findUser(email);
       if (!existing) {
@@ -131,6 +135,16 @@ Deno.serve(async (req) => {
       const gl = await admin.auth.admin.generateLink({ type: u ? "magiclink" : "invite", email, options: { redirectTo: TRACKER_URL } });
       if (gl.error) throw gl.error;
       return json(req, 200, { ok: true, link: gl.data.properties.action_link });
+    }
+
+    // Which tabs a member can open (null = all) and whether they can change anything.
+    if (action === "set_access") {
+      const TABS = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "leads", "settings"];
+      const tabs = Array.isArray(body.tabs) ? body.tabs.filter((t: string) => TABS.includes(t)) : null;
+      if (tabs && !tabs.length) return json(req, 400, { error: "Pick at least one tab" });
+      const { error } = await admin.from("team_members").update({ tabs, read_only: !!body.read_only }).eq("email", email);
+      if (error) throw error;
+      return json(req, 200, { ok: true });
     }
 
     if (action === "set_role") {

@@ -481,7 +481,7 @@
     function sumCat(rows, cat) { return function (k) { return rows.reduce(function (s, c) { return s + (cat === "spend" ? spent(c.id, k) : val(c.id, k, cat)); }, 0); }; }
     function section(id, title, sub, table, addCat) {
       return '<section class="rep-sec" id="' + id + '"><div class="rep-h"><h2>' + esc(title) + "</h2>" +
-        (addCat ? '<button class="btn sm" data-add="' + addCat + '">+ Add amount</button>' : "") + "</div>" +
+        (addCat && !ro() ? '<button class="btn sm" data-add="' + addCat + '">+ Add amount</button>' : "") + "</div>" +
         (sub ? '<p class="muted rep-sub">' + sub + "</p>" : "") +
         '<div class="sheet-wrap"><table class="sheet">' + table + "</table></div></section>";
     }
@@ -520,7 +520,8 @@
 
     var partnerName = (d.partners[0] || {}).name || "partner";
     el.innerHTML = '<div class="cl-wrap rep">' +
-      '<div class="cl-head"><div><h1>Finance</h1><p class="muted">' + esc(y) + ". Click any month to see or add amounts.</p></div></div>" +
+      '<div class="cl-head"><div><h1>Finance</h1><p class="muted">' + esc(y) + ". " + (ro() ? "Click any month to see what's in it." : "Click any month to see or add amounts.") + "</p></div>" +
+        '<div class="cl-actions"><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
       '<div class="fin-range"><div class="seg" role="group" aria-label="Time frame">' + RANGES.map(function (r) {
         return '<button class="seg-b' + (view.range === r[0] ? " on" : "") + '" data-frange="' + r[0] + '">' + r[1] + "</button>";
       }).join("") + "</div>" +
@@ -550,6 +551,7 @@
       td.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); td.onclick(); } };
     });
     el.querySelectorAll("[data-add]").forEach(function (b) { b.onclick = function () { addAmount(b.dataset.add, el); }; });
+    $("finExport").onclick = function () { window.SGSExport.open({ d: d, T: T, from: keys[0], to: keys[keys.length - 1] }); };
     el.querySelectorAll("[data-frange]").forEach(function (b) {
       b.onclick = function () {
         if (b.dataset.frange === "custom" && view.range !== "custom") { var ks = rangeKeys(); view.from = ks[0]; view.to = ks[ks.length - 1]; }
@@ -581,7 +583,9 @@
   }
 
   /* ---------- cell detail / add / edit ---------- */
+  function ro() { return !!(T.readOnly && T.readOnly()); }
   function editCell(cid, key, cat, el, editId) {
+    if (ro()) { editId = null; }
     var c = byId(d.clients, cid);
     var rows = d.entries.filter(function (e) { return e.client_id === cid && ym(e.month) === key && e.category === cat; });
     var synced = cat === "ad_spend" ? val(cid, key, "synced_spend") : 0;
@@ -598,15 +602,16 @@
         return "<li><span class='amt'>" + money(e.amount, { cents: true }) + "</span><span class='what'>" +
           esc([e.entry_date ? dateShort(e.entry_date) : "", e.payment_method, e.note].filter(Boolean).join(" · ") || "—") +
           "<small>" + esc(SOURCE[e.source] || e.source) + (e.created_by ? " · " + esc(e.created_by) : "") + "</small></span>" +
-          (locked ? "" : "<span class='act'><button class='btn sm ghost' data-edit='" + e.id + "'>Edit</button><button class='btn sm ghost danger' data-del='" + e.id + "' aria-label='Delete'>×</button></span>") + "</li>";
+          (locked || ro() ? "" : "<span class='act'><button class='btn sm ghost' data-edit='" + e.id + "'>Edit</button><button class='btn sm ghost danger' data-del='" + e.id + "' aria-label='Delete'>×</button></span>") + "</li>";
       }).join("") + (synced ? "<li><span class='amt'>" + money(synced, { cents: true }) + "</span><span class='what'>Daily spend from Meta<small>Meta (synced)</small></span></li>" : "") + "</ul>"
         : "<p class='muted' style='font-size:14px'>Nothing recorded yet.</p>") +
-      "<h3>" + (editing ? "Edit amount" : "Add an amount") + "</h3>" +
+      (ro() ? "<div class='mfoot'><button class='btn' id='mCancel'>Close</button></div>" : "<h3>" + (editing ? "Edit amount" : "Add an amount") + "</h3>" +
       "<div class='g3'><div class='fld'><label for='meAmt'>Amount ($)</label><input class='inp' id='meAmt' type='number' step='0.01' inputmode='decimal' value='" + (editing ? esc(editing.amount) : "") + "'></div>" +
       "<div class='fld'><label for='meDate'>Date <span class='opt'>optional</span></label><input class='inp' id='meDate' type='date' value='" + esc(editing ? editing.entry_date || "" : (key === ym(todayStr()) ? todayStr() : "")) + "'></div>" +
       "<div class='fld'><label for='meNote'>Note <span class='opt'>optional</span></label><input class='inp' id='meNote' value='" + esc(editing ? editing.note : "") + "' placeholder='" + (cat === "per_lead" ? "e.g. 4 leads - 10/28/26" : "e.g. Zelle, Stripe invoice") + "'></div></div>" +
-      "<div class='mfoot'><button class='btn' id='mCancel'>Close</button><button class='btn gold' id='mSave'>" + (editing ? "Save changes" : "Add") + "</button></div>");
+      "<div class='mfoot'><button class='btn' id='mCancel'>Close</button><button class='btn gold' id='mSave'>" + (editing ? "Save changes" : "Add") + "</button></div>"));
     $("mCancel").onclick = T.closeModal;
+    if (ro()) { return; }
     document.querySelectorAll("[data-edit]").forEach(function (b) { b.onclick = function () { editCell(cid, key, cat, el, b.dataset.edit); }; });
     document.querySelectorAll("[data-del]").forEach(function (b) {
       b.onclick = async function () {

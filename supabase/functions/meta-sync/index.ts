@@ -472,6 +472,33 @@ Deno.serve(async (req) => {
     const billing = ev.filter((e) => e.event_type === "ad_account_billing_charge");
     return json(req, 200, { events: ev.length, types: [...new Set(ev.map((e) => e.event_type))], billing: billing.slice(0, 40) });
   }
+  // Read-only: card charges on SGS's own ad account(s) between two dates, for the Finance export.
+  if (body.action === "own_charges") {
+    const t = Deno.env.get("META_ACCESS_TOKEN") || "";
+    if (!t) return json(req, 200, { configured: false });
+    const D = /^\d{4}-\d{2}-\d{2}$/;
+    const from = D.test(String(body.since || "")) ? String(body.since) : FIRST_DAY;
+    const to = D.test(String(body.until || "")) ? String(body.until) : ymd(new Date());
+    const charges: any[] = [];
+    for (const acct of OWN_ACCOUNTS) {
+      let card = "";
+      try { const a = await graph("/act_" + acct, { fields: "name,funding_source_details" }, t); card = String((a.funding_source_details && a.funding_source_details.display_string) || ""); } catch (_) { /* card label is optional */ }
+      // Meta's since/until are inclusive days in the account's time zone: pad a day each side, filter by NY date below.
+      const ev = await graphAll("/act_" + acct + "/activities", {
+        fields: "event_time,event_type,extra_data", since: addDays(from, -1), until: addDays(to, 1), limit: "500",
+      }, t);
+      for (const e of ev) {
+        if (e.event_type !== "ad_account_billing_charge") continue;
+        const x = parseExtra(e.extra_data);
+        const cents = Number(x.new_value ?? x.amount ?? x.charge_amount);
+        const date = nyDate(e.event_time);
+        if (!isFinite(cents) || !cents || date < from || date > to) continue;
+        charges.push({ date, account: acct, amount: Math.round(cents) / 100, txn: String(x.transaction_id || ""), card: String(x.payment_method || card).slice(0, 60) });
+      }
+    }
+    charges.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    return json(req, 200, { ok: true, charges });
+  }
   // Live balances (spend Meta hasn't charged to the card yet) for every account linked to a client.
   if (body.action === "balances") {
     const t = Deno.env.get("META_ACCESS_TOKEN") || "";

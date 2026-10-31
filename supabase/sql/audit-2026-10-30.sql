@@ -61,3 +61,10 @@ alter table public.meta_leads add column if not exists voided_at timestamptz, ad
 alter table public.ghl_contacts add column if not exists voided_at timestamptz, add column if not exists void_reason text not null default '', add column if not exists voided_by text not null default '';
 grant update (voided_at, void_reason, voided_by) on public.meta_leads to authenticated;
 grant update (voided_at, void_reason, voided_by) on public.ghl_contacts to authenticated;
+
+-- Per-member tab access (Oct 31 2026, migration per_user_tab_access; applied live).
+-- team_members.tabs text[] (null = every tab) and read_only boolean; admins always see and change everything.
+-- Helpers: my_access(), can_see(tab), can_see_any(tabs[]), can_write(). Policies split into
+-- "team reads X" (is_team) and "editors change X" (can_write); leads/intake need the leads tab,
+-- client_contacts the clients tab, meta_leads/ghl_contacts the lead tabs, meta_ad_daily sgs/finance.
+-- Full SQL: Supabase migration history (list_migrations -> per_user_tab_access).

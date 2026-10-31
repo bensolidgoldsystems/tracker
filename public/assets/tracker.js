@@ -124,6 +124,27 @@
   });
 
   var myRole = null;
+  // Per-member access (team_members.tabs / read_only; admins see everything). The database enforces it;
+  // this only hides what they can't open.
+  var access = { tabs: null, readOnly: false };
+  var TAB_LINKS = { overview: "tabOverview", clients: "tabClients", finance: "tabReports", adleads: "tabAdLeads", sgs: "tabSgs", ppl: "tabPpl", leads: "tabLeads" };
+  var TAB_ORDER = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "leads"];
+  function canSee(tab) { return !access.tabs || access.tabs.indexOf(tab) !== -1; }
+  function tabFor(h) {
+    if (/^#settings/.test(h)) { return "account"; }
+    if (h === "#admin") { return "admin"; }
+    if (/^#lead(s|\/)/.test(h)) { return "leads"; }
+    if (/^#sgs/.test(h)) { return "sgs"; }
+    if (/^#adleads/.test(h)) { return "adleads"; }
+    if (/^#ppl/.test(h)) { return "ppl"; }
+    if (/^#(reports|finance)/.test(h)) { return "finance"; }
+    if (/^#(clients|client\/|partner\/)/.test(h)) { return "clients"; }
+    return "overview";
+  }
+  function applyAccess() {
+    Object.keys(TAB_LINKS).forEach(function (t) { $(TAB_LINKS[t]).classList.toggle("hidden", !canSee(t)); });
+    document.body.classList.toggle("read-only", access.readOnly);
+  }
   async function enterApp() {
     var r = await sb.rpc("is_team");
     if (r.error || !r.data) {
@@ -133,12 +154,15 @@
     }
     var role = await sb.rpc("my_role");
     myRole = role.data || "member";
+    var acc = await sb.rpc("my_access");
+    access = { tabs: (acc.data && acc.data.tabs) || null, readOnly: !!(acc.data && acc.data.read_only) };
+    applyAccess();
     $("adminLink").classList.toggle("hidden", myRole !== "admin");
     $("authView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     lastPing = 0;
     markActive(true);
-    await loadLeads();
+    if (canSee("leads")) { await loadLeads(); }
     route();
   }
 
@@ -300,6 +324,11 @@
     var h = location.hash;
     var m = h.match(/^#lead\/([0-9a-f-]{36})/);
     flushNotes();
+    var tab = tabFor(h);
+    if (tab !== "account" && tab !== "admin" && !canSee(tab)) {
+      location.replace("#" + (TAB_ORDER.filter(canSee)[0] || "settings"));   // hashchange routes again
+      return;
+    }
     if (!m) { current = null; openGen++; }
     if (/^#settings/.test(h)) { show("settingsView"); openSettings(); }
     else if (h === "#admin" && myRole === "admin") { show("adminView"); openAdmin(); }
@@ -330,7 +359,7 @@
       '<div class="lead-head"><div><h1>Settings</h1></div></div>' +
       '<div class="panel"><h2>Account</h2>' +
       '<dl class="ans"><dt>Email</dt><dd>' + esc(email) + '</dd><span></span></dl>' +
-      '<dl class="ans"><dt>Role</dt><dd>' + (myRole === "admin" ? "Admin" : "Member") + '</dd><span></span></dl>' +
+      '<dl class="ans"><dt>Role</dt><dd>' + (myRole === "admin" ? "Admin" : "Member" + (access.readOnly ? " (view only)" : "")) + '</dd><span></span></dl>' +
       '<dl class="ans"><dt>Two-factor</dt><dd>On. Each new sign-in needs a 6-digit code emailed to you.</dd><span></span></dl></div>' +
       '<div class="panel"><h2>Change password</h2>' +
       '<form id="pwForm" class="pw-form" novalidate>' +
@@ -372,9 +401,11 @@
       toast("Password updated");
     });
     $("soHere").addEventListener("click", function () { signOut(); });   // this device only
-    window.SGSClients.renderSettings($("settingsExtra"));
-    window.SGSReports.metaSettings($("metaSettings"));
-    window.SGSReports.qboSettings($("qboSettings"));
+    if (canSee("settings") && !access.readOnly) {
+      window.SGSClients.renderSettings($("settingsExtra"));
+      window.SGSReports.metaSettings($("metaSettings"));
+      window.SGSReports.qboSettings($("qboSettings"));
+    }
     $("soAll").addEventListener("click", async function () {
       if (!confirm("Sign out of the Tracker on every device?")) { return; }
       try { await fn("email-2fa", { action: "signout" }); } catch (e) { /* best effort */ }
@@ -404,8 +435,9 @@
       '<form id="invForm" class="inv-row" novalidate>' +
       '<div class="fld"><label for="invEmail">Email</label><input class="inp" id="invEmail" type="email" placeholder="name@solidgoldsystems.com" required></div>' +
       '<div class="fld"><label for="invRole">Role</label><select class="inp" id="invRole"><option value="member">Member</option><option value="admin">Admin</option></select></div>' +
+      '<div class="fld"><label for="invAccess">Can see</label><select class="inp" id="invAccess"><option value="all">Everything</option><option value="finance">Finance only, view &amp; export</option></select></div>' +
       '<button class="btn gold" type="submit" id="invBtn">Send invite</button></form>' +
-      '<p class="muted" style="font-size:13px;margin-top:10px"><b>Members</b> can see and work on all leads. <b>Admins</b> can also invite and remove people.</p>' +
+      '<p class="muted" style="font-size:13px;margin-top:10px"><b>Members</b> can see and work on all leads. <b>Admins</b> can also invite and remove people and always see everything. Use <b>Access</b> on a member to pick which tabs they see and whether they can change anything.</p>' +
       '<div id="invResult"></div></div>' +
       '<div class="panel"><h2>Team <span class="muted" id="teamCount" style="font-family:var(--body);font-size:13px"></span></h2><div id="teamList"><p class="muted">Loading...</p></div></div>';
     $("invForm").addEventListener("submit", async function (e) {
@@ -414,7 +446,8 @@
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Enter a valid email"); return; }
       var btn = $("invBtn"); btn.disabled = true; btn.textContent = "Sending...";
       try {
-        var d = await fn("admin-users", { action: "invite", email: email, role: $("invRole").value });
+        var fin = $("invAccess").value === "finance" && $("invRole").value !== "admin";
+        var d = await fn("admin-users", { action: "invite", email: email, role: $("invRole").value, tabs: fin ? ["finance"] : null, read_only: fin });
         $("invEmail").value = "";
         showInviteResult(email, d);
         loadTeam();
@@ -446,10 +479,12 @@
         var status = u.status === "active" ? '<span class="badge ok">Active</span>' : u.status === "invited" ? '<span class="badge warn">Invite pending</span>' : '<span class="badge">No account</span>';
         return '<div class="team-row" data-email="' + esc(u.email) + '">' +
           '<div class="team-who"><b>' + esc(u.email) + "</b>" + (u.is_me ? ' <span class="badge gold">You</span>' : "") +
-          '<small>' + status + " · Last sign-in " + esc(ago(u.last_sign_in_at)) + (u.invited_by ? " · Invited by " + esc(u.invited_by) : "") + "</small></div>" +
+          '<small>' + status + " · Last sign-in " + esc(ago(u.last_sign_in_at)) + (u.invited_by ? " · Invited by " + esc(u.invited_by) : "") + "</small>" +
+          '<small class="team-access">' + esc(accessText(u)) + "</small></div>" +
           '<select class="inp team-role" aria-label="Role for ' + esc(u.email) + '"' + (u.is_me ? " disabled" : "") + ">" +
           '<option value="member"' + (u.role === "member" ? " selected" : "") + '>Member</option><option value="admin"' + (u.role === "admin" ? " selected" : "") + ">Admin</option></select>" +
           '<div class="team-actions">' +
+          (u.role !== "admin" ? '<button class="btn sm" data-act="access">Access</button>' : "") +
           (u.status !== "active" ? '<button class="btn sm" data-act="link">Copy invite link</button>' : "") +
           (u.status === "active" && !u.is_me ? '<button class="btn sm ghost" data-act="sign_out" title="They will need a new email code next time">Sign out</button>' : "") +
           (u.is_me ? "" : '<button class="btn sm ghost danger" data-act="remove">Remove</button>') +
@@ -459,12 +494,13 @@
         var email = row.dataset.email;
         var sel = row.querySelector(".team-role");
         sel.addEventListener("change", async function () {
-          try { await fn("admin-users", { action: "set_role", email: email, role: sel.value }); toast(email + " is now " + (sel.value === "admin" ? "an admin" : "a member")); }
+          try { await fn("admin-users", { action: "set_role", email: email, role: sel.value }); toast(email + " is now " + (sel.value === "admin" ? "an admin" : "a member")); loadTeam(); }
           catch (err) { fail(err); loadTeam(); }
         });
         row.querySelectorAll("[data-act]").forEach(function (b) {
           b.addEventListener("click", async function () {
             var act = b.dataset.act;
+            if (act === "access") { editAccess(m.filter(function (x) { return x.email === email; })[0]); return; }
             if (act === "remove" && !confirm("Remove " + email + " from the Tracker? Their account is deleted and they lose access right away.")) { return; }
             if (act === "sign_out" && !confirm("Sign " + email + " out? They'll need a new email code to get back in.")) { return; }
             b.disabled = true;
@@ -481,6 +517,33 @@
     } catch (err) {
       list.innerHTML = '<p class="muted">' + esc(err.message) + "</p>";
     }
+  }
+
+  var TAB_NAMES = { overview: "Overview", clients: "Clients", finance: "Finance", adleads: "Client Leads", sgs: "SGS Leads", ppl: "Pay per lead", leads: "Website Leads", settings: "Settings (Meta, QuickBooks, services)" };
+  function accessText(u) {
+    if (u.role === "admin") { return "Sees everything"; }
+    var t = u.tabs && u.tabs.length ? u.tabs.map(function (k) { return (TAB_NAMES[k] || k).replace(/ \(.*/, ""); }).join(", ") : "All tabs";
+    return t + (u.read_only ? " · view only" : "");
+  }
+  function editAccess(u) {
+    var on = function (k) { return !u.tabs || u.tabs.indexOf(k) !== -1; };
+    modal("<h2>Access</h2><p class='muted' style='margin:-8px 0 14px'>" + esc(u.email) + "</p>" +
+      "<div class='acc-tabs'>" + Object.keys(TAB_NAMES).map(function (k) {
+        return "<label class='chk'><input type='checkbox' data-tab='" + k + "'" + (on(k) ? " checked" : "") + "> " + esc(TAB_NAMES[k]) + "</label>";
+      }).join("") + "</div>" +
+      "<label class='chk' style='margin-top:14px'><input type='checkbox' id='accRo'" + (u.read_only ? " checked" : "") + "> <b>View only</b> &nbsp;<span class='muted'>can look and export, but can't add, edit, delete, charge or sync</span></label>" +
+      "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Save</button></div>");
+    $("mCancel").onclick = closeModal;
+    $("mSave").onclick = async function () {
+      var picked = Array.prototype.filter.call(document.querySelectorAll("[data-tab]"), function (i) { return i.checked; }).map(function (i) { return i.dataset.tab; });
+      if (!picked.length) { toast("Pick at least one tab"); return; }
+      var all = picked.length === Object.keys(TAB_NAMES).length;
+      this.disabled = true;
+      try {
+        await fn("admin-users", { action: "set_access", email: u.email, tabs: all ? null : picked, read_only: $("accRo").checked });
+        closeModal(); toast("Access saved. It applies the next time they open Tracker."); loadTeam();
+      } catch (err) { fail(err); this.disabled = false; }
+    };
   }
 
   /* ---------- lead detail ---------- */
@@ -972,7 +1035,8 @@
   /* ---------- clients module (clients.js) ---------- */
   var shared = {
     sb: sb, $: $, esc: esc, toast: toast, fail: fail, copyText: copyText, fmtDate: fmtDate,
-    linkify: linkify, modal: modal, closeModal: closeModal, fn: fn
+    linkify: linkify, modal: modal, closeModal: closeModal, fn: fn,
+    canSee: function (t) { return canSee(t); }, readOnly: function () { return access.readOnly; }
   };
   window.SGSClients.init(shared);
   window.SGSReports.init(shared);

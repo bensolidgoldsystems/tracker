@@ -36,8 +36,9 @@ async function caller(token: string): Promise<string | null> {
   const user = createClient(url, Deno.env.get("SUPABASE_ANON_KEY") || "", {
     auth: { persistSession: false }, global: { headers: { Authorization: "Bearer " + token } },
   });
-  const { data: ok } = await user.rpc("is_team");
-  if (ok !== true) return null;
+  // Signed-in team member who can open Pay per lead and change things (view-only members can't charge).
+  const [{ data: ok }, { data: see }, { data: write }] = await Promise.all([user.rpc("is_team"), user.rpc("can_see", { tab: "ppl" }), user.rpc("can_write")]);
+  if (ok !== true || see !== true || write !== true) return null;
   const { data } = await user.auth.getUser(token);
   return (data && data.user && data.user.email) || "team";
 }
