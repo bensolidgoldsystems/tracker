@@ -273,7 +273,7 @@
           '<div class="who">' + esc(l.contact_name || l.email || "") + "</div>" +
           '<div class="pbar"><i style="width:' + cs.pct + '%"></i></div>' +
           '<div class="row"><span>Checklist ' + cs.done + "/" + cs.total + " · " + (l.lead_files || []).length + " files</span>" +
-          (l.intake_status === "uploading" ? '<span class="badge warn">Filling out form</span>' : l.source === "manual" ? '<span class="badge">Manual</span>' : "<span>" + fmtDate(l.created_at) + "</span>") + "</div>";
+          (l.intake_status === "uploading" ? '<span class="badge warn">Filling out form</span>' : l.source === "manual" ? '<span class="badge">Manual</span>' : l.source === "call_invite" ? '<span class="badge gold">After call</span> <span>' + fmtDate(l.created_at) + "</span>" : "<span>" + fmtDate(l.created_at) + "</span>") + "</div>";
         a.addEventListener("dragstart", function (e) { e.dataTransfer.setData("text/plain", l.id); a.classList.add("dragging"); });
         a.addEventListener("dragend", function () { a.classList.remove("dragging"); });
         col.appendChild(a);
@@ -294,6 +294,57 @@
   $("search").addEventListener("input", renderBoard);
   $("refresh").addEventListener("click", function () { loadLeads().then(function () { toast("Refreshed"); }); });
   $("copyIntake").addEventListener("click", function () { copyText("https://websites.solidgoldsystems.com/"); });
+  /* Private form link for someone who already had a call: skips the short form and booking.
+     One use, 14 days (intake_invites with no client). */
+  function inviteToken() {
+    var b = new Uint8Array(24); crypto.getRandomValues(b);
+    return btoa(String.fromCharCode.apply(null, b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  async function callLinks() {
+    var r = await sb.from("intake_invites").select("*").is("client_id", null).order("created_at", { ascending: false }).limit(8);
+    var list = r.data || [], now = new Date();
+    var state = function (i) {
+      return i.used_at ? '<span class="badge ok">Submitted</span>' + (i.lead_id ? ' <a href="#lead/' + i.lead_id + '">Open lead</a>' : "")
+        : new Date(i.expires_at) < now ? '<span class="badge">Expired</span>'
+        : '<span class="badge gold">Open</span> <a href="#" data-copy="' + esc(i.token) + '">Copy link</a>';
+    };
+    modal("<h2>Form link for someone who had a call</h2>" +
+      "<p class='muted' style='font-size:14px;margin-bottom:12px'>A private link straight to the detailed website form, no short form or booking. Their info is pre-filled. It works once and expires in 14 days.</p>" +
+      "<div class='g3' style='grid-template-columns:1fr 1fr'>" +
+      "<div class='fld'><label for='clName'>Name</label><input class='inp' id='clName' autocomplete='off'></div>" +
+      "<div class='fld'><label for='clBiz'>Business <span class='opt'>optional</span></label><input class='inp' id='clBiz' autocomplete='off'></div>" +
+      "<div class='fld'><label for='clEmail'>Email <span class='opt'>optional</span></label><input class='inp' id='clEmail' type='email' autocomplete='off'></div>" +
+      "<div class='fld'><label for='clPhone'>Phone <span class='opt'>optional</span></label><input class='inp' id='clPhone' type='tel' autocomplete='off'></div></div>" +
+      "<div id='clOut'></div>" +
+      (list.length ? "<h3>Recent links</h3><ul class='hist'>" + list.map(function (i) {
+        return "<li>" + esc(i.contact_name || i.business_name || "No name") + " · " + esc(fmtDate(i.created_at)) + " · " + state(i) + "</li>";
+      }).join("") + "</ul>" : "") +
+      "<div class='mfoot'><button class='btn' id='mCancel'>Close</button><button class='btn gold' id='clGo'>Create link</button></div>");
+    $("mCancel").onclick = closeModal;
+    document.querySelectorAll("[data-copy]").forEach(function (a) { a.onclick = function (e) { e.preventDefault(); copyText(INTAKE_URL + "?invite=" + a.dataset.copy); }; });
+    $("clGo").onclick = async function () {
+      var name = $("clName").value.trim();
+      if (!name) { toast("Add their name"); return; }
+      var btn = this; btn.disabled = true;
+      var me = await sb.auth.getUser(), tok = inviteToken();
+      var ins = await sb.from("intake_invites").insert({ token: tok, client_id: null, contact_name: name, business_name: $("clBiz").value.trim(),
+        email: $("clEmail").value.trim(), phone: $("clPhone").value.trim(), created_by: (me.data && me.data.user && me.data.user.email) || "" });
+      btn.disabled = false;
+      if (ins.error) { fail(ins.error); return; }
+      var url = INTAKE_URL + "?invite=" + tok, first = name.split(" ")[0];
+      var msg = "Hi " + first + "! Great talking with you. Here's your private link to send us everything for your new website (logo, photos, videos, services). It takes about 10 minutes: " + url;
+      $("clOut").innerHTML = "<div class='inv-link'><div class='addfiles'><input class='inp' readonly value='" + esc(url) + "'><button class='btn' id='clCopy'>Copy link</button></div>" +
+        "<div class='addfiles' style='margin-top:8px'><a class='btn sm' id='clText'>Text it</a><a class='btn sm' id='clMail'>Email it</a></div></div>";
+      $("clCopy").onclick = function () { copyText(url); };
+      $("clText").href = "sms:" + encodeURIComponent($("clPhone").value.trim()) + "?&body=" + encodeURIComponent(msg);
+      $("clMail").href = "mailto:" + encodeURIComponent($("clEmail").value.trim()) + "?subject=" + encodeURIComponent("Your website form") + "&body=" + encodeURIComponent(msg);
+      copyText(url);
+      btn.textContent = "Create another";
+      ["clName", "clBiz", "clEmail", "clPhone"].forEach(function (id) { $(id).addEventListener("input", function () { $("clOut").innerHTML = ""; }, { once: true }); });
+    };
+  }
+  $("callLink").addEventListener("click", function () { callLinks(); });
+
   $("newLead").addEventListener("click", async function () {
     var name = prompt("Business name for the new lead:");
     if (!name) { return; }
@@ -644,6 +695,7 @@
     }).join("");
     var link = (current.lead.answers || {}).photos_link;
     return '<div class="panel"><h2>Files <span class="muted" style="font-family:var(--body);font-size:13px">' + current.files.length + " files · " + fmtSize(total) + "</span></h2>" +
+      ((current.lead.answers || {}).use_existing_media === true ? '<p class="hintbox" style="font-size:14px;margin-bottom:8px">OK to use the photos and videos from their current website and social media.</p>' : "") +
       (link ? '<p style="font-size:14px;margin-bottom:8px">Photo link: ' + linkify(link) + "</p>" : "") +
       (body || '<p class="muted" style="font-size:14px">No files yet.</p>') +
       '<div class="kind"><h3>Add files</h3><div class="addfiles"><select class="inp" id="addKind">' +

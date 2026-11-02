@@ -58,10 +58,12 @@
       ]
     },
     {
-      id: "photos", num: "04", title: "Photos of Your Work", sub: "Past jobs, before/afters, products, your shop or trucks, and you and your team. Real photos convert far better than stock.",
+      id: "photos", num: "04", title: "Photos & Videos of Your Work", sub: "Already posted on your website or social media? Check the box and we'll pull them for you. Want to add more? Upload them below or paste a link.",
       fields: [
-        { id: "photos_link", label: "Link to your photos", labelNote: "recommended", type: "url", ph: "Google Drive, Dropbox, iCloud or Google Photos link", hint: "Best for lots of photos or any videos. Make the link viewable by anyone who has it." },
-        { id: "photos", label: "Or upload them here", type: "files", kind: "photos", max: 25, accept: "image/*,.heic,.heif", btn: "Upload photos", btnSub: "Up to 25 of your best. They start sending right away." },
+        { id: "use_existing_media", label: "Use the photos and videos from my current website and social media", type: "check" },
+        { id: "photos_link", label: "Link to your photos or videos", labelNote: "recommended for a lot of files", type: "url", ph: "Google Drive, Dropbox, iCloud or Google Photos link", hint: "Make the link viewable by anyone who has it." },
+        { id: "photos", label: "Upload photos", type: "files", kind: "photos", half: true, max: 25, accept: "image/*,.heic,.heif", btn: "Upload photos", btnSub: "Up to 25 of your best" },
+        { id: "videos", label: "Upload videos", type: "files", kind: "videos", half: true, max: 10, accept: "video/*,.mov,.mp4,.m4v", btn: "Upload videos", btnSub: "Up to 10, full quality" },
         { id: "before_after", label: "Before & after photos", type: "files", kind: "before_after", half: true, max: 15, accept: "image/*,.heic,.heif", btn: "Upload before & afters", btnSub: "If your work has them" },
         { id: "headshots", label: "Owner or team photos", type: "files", kind: "headshots", half: true, max: 15, accept: "image/*,.heic,.heif", btn: "Upload headshots", btnSub: "People trust faces" }
       ]
@@ -119,6 +121,7 @@
     { id: "logo", label: "Logo", source: "client" },
     { id: "icon", label: "Icon", source: "client" },
     { id: "photos", label: "Site photos", source: "client" },
+    { id: "videos", label: "Videos", source: "client" },
     { id: "reviews", label: "Review screenshots", source: "client" },
     { id: "banner", label: "Text preview banner", source: "sgs" },
     { id: "hero", label: "Hero video", source: "sgs" },
@@ -140,7 +143,7 @@
       { id: "icon", label: "Icon", from: function (a, f) { return nfiles(f, "icon") > 0; } },
       { id: "banner", label: "Text preview banner", from: function (a, f) { return nfiles(f, "banner") > 0; } },
       { id: "hero", label: "Hero video", note: "optional", from: function (a, f) { return nfiles(f, "hero") > 0; } },
-      { id: "photos", label: "Site photos", note: "gallery, products, place of business", from: function (a, f) { return nfiles(f, "photos") > 0 || has(a, "photos_link"); } },
+      { id: "photos", label: "Site photos", note: "gallery, products, place of business", from: function (a, f) { return nfiles(f, "photos") > 0 || nfiles(f, "videos") > 0 || has(a, "photos_link") || a.use_existing_media === true; } },
       { id: "brand", label: "Brand colors and fonts / style guide", from: function (a, f) { return has(a, "brand_colors") || nfiles(f, "brand_guide") > 0; } },
       { id: "testimonials", label: "Testimonials and reviews", note: "screenshots or text", from: function (a, f) { return has(a, "testimonials") || nfiles(f, "reviews") > 0; } },
       { id: "headshots", label: "Owner or team headshots", from: function (a, f) { return nfiles(f, "headshots") > 0; } },
