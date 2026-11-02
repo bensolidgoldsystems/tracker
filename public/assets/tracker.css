@@ -545,3 +545,5 @@ a.al-row:hover{background:var(--card)}
 label.chk{display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer}
 label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 .read-only .done-btn,.read-only [data-add]{display:none}
+.from-site{border-color:var(--gold-line)}
+.from-site .chips{display:flex;flex-wrap:wrap;gap:6px}

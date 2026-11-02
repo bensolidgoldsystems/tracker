@@ -49,6 +49,7 @@
     {
       id: "brand", num: "03", title: "Logo & Brand", sub: "Highest-quality versions you have. PNG or SVG with a transparent background is best.",
       fields: [
+        { id: "use_existing_logo", label: "Use the logo and icon from my current website", type: "check", note: "Have something that isn't on your current site yet? Add it below and we'll use both." },
         { id: "logo", label: "Logo", type: "files", kind: "logo", half: true, max: 5, accept: "image/*,.svg,.pdf,.ai,.eps", btn: "Upload logo", btnSub: "PNG, SVG, JPG or PDF" },
         { id: "icon", label: "Icon", type: "files", kind: "icon", half: true, max: 3, accept: "image/*,.svg,.pdf", btn: "Upload icon", btnSub: "The square/symbol version of your logo" },
         { id: "no_logo", label: "I don't have a logo / I want a new one", type: "check" },
@@ -58,9 +59,9 @@
       ]
     },
     {
-      id: "photos", num: "04", title: "Photos & Videos of Your Work", sub: "Already posted on your website or social media? Check the box and we'll pull them for you. Want to add more? Upload them below or paste a link.",
+      id: "photos", num: "04", title: "Photos & Videos of Your Work", sub: "Past jobs, before/afters, products, your shop or trucks, and you and your team. Real photos and videos convert far better than stock.",
       fields: [
-        { id: "use_existing_media", label: "Use the photos and videos from my current website and social media", type: "check" },
+        { id: "use_existing_media", label: "Use the photos and videos from my current website and social media", type: "check", note: "Have something that isn't on your current site yet? Add it below and we'll use both." },
         { id: "photos_link", label: "Link to your photos or videos", labelNote: "recommended for a lot of files", type: "url", ph: "Google Drive, Dropbox, iCloud or Google Photos link", hint: "Make the link viewable by anyone who has it." },
         { id: "photos", label: "Upload photos", type: "files", kind: "photos", half: true, max: 25, accept: "image/*,.heic,.heif", btn: "Upload photos", btnSub: "Up to 25 of your best" },
         { id: "videos", label: "Upload videos", type: "files", kind: "videos", half: true, max: 10, accept: "video/*,.mov,.mp4,.m4v", btn: "Upload videos", btnSub: "Up to 10, full quality" },
@@ -71,6 +72,7 @@
     {
       id: "reviews", num: "05", title: "Reviews & Credentials", sub: "Social proof is one of the biggest drivers of calls. Send whatever you've got.",
       fields: [
+        { id: "use_existing_reviews", label: "Use the reviews, licenses and credentials from my current website", type: "check", note: "Have something that isn't on your current site yet? Add it below and we'll use both." },
         { id: "google_reviews_link", label: "Google reviews link", type: "url", half: true, ph: "Link to your Google reviews" },
         { id: "other_review_sites", label: "Other review sites", type: "text", half: true, ph: "Yelp, Angi, HomeAdvisor, Houzz, Facebook." },
         { id: "testimonials", label: "Your favorite testimonials", type: "textarea", rows: 4, ph: "Paste reviews here, with the customer's first name and town if you have them." },
@@ -83,6 +85,7 @@
     {
       id: "social", num: "06", title: "Social & Online Links", sub: "Paste the full link for any you have. Leave the rest blank.",
       fields: [
+        { id: "use_existing_social", label: "Use the social and online links from my current website", type: "check", note: "Have something that isn't on your current site yet? Add it below and we'll use both." },
         { id: "instagram", label: "Instagram", type: "url", half: true, ph: "https://instagram.com/..." },
         { id: "facebook", label: "Facebook", type: "url", half: true, ph: "https://facebook.com/..." },
         { id: "tiktok", label: "TikTok", type: "url", half: true, ph: "https://tiktok.com/@..." },
@@ -139,22 +142,22 @@
 
   var CHECKLIST = [
     { id: "files", title: "Files", items: [
-      { id: "logo", label: "Logo", from: function (a, f) { return nfiles(f, "logo") > 0; } },
-      { id: "icon", label: "Icon", from: function (a, f) { return nfiles(f, "icon") > 0; } },
+      { id: "logo", label: "Logo", from: function (a, f) { return nfiles(f, "logo") > 0 || (a.use_existing_logo === true && "site"); } },
+      { id: "icon", label: "Icon", from: function (a, f) { return nfiles(f, "icon") > 0 || (a.use_existing_logo === true && "site"); } },
       { id: "banner", label: "Text preview banner", from: function (a, f) { return nfiles(f, "banner") > 0; } },
       { id: "hero", label: "Hero video", note: "optional", from: function (a, f) { return nfiles(f, "hero") > 0; } },
-      { id: "photos", label: "Site photos", note: "gallery, products, place of business", from: function (a, f) { return nfiles(f, "photos") > 0 || nfiles(f, "videos") > 0 || has(a, "photos_link") || a.use_existing_media === true; } },
+      { id: "photos", label: "Site photos", note: "gallery, products, place of business", from: function (a, f) { return nfiles(f, "photos") > 0 || nfiles(f, "videos") > 0 || has(a, "photos_link") || (a.use_existing_media === true && "site"); } },
       { id: "brand", label: "Brand colors and fonts / style guide", from: function (a, f) { return has(a, "brand_colors") || nfiles(f, "brand_guide") > 0; } },
-      { id: "testimonials", label: "Testimonials and reviews", note: "screenshots or text", from: function (a, f) { return has(a, "testimonials") || nfiles(f, "reviews") > 0; } },
+      { id: "testimonials", label: "Testimonials and reviews", note: "screenshots or text", from: function (a, f) { return has(a, "testimonials") || nfiles(f, "reviews") > 0 || (a.use_existing_reviews === true && "site"); } },
       { id: "headshots", label: "Owner or team headshots", from: function (a, f) { return nfiles(f, "headshots") > 0; } },
-      { id: "badges", label: "Licenses, insurance, certifications, awards", note: "trust badges", from: function (a, f) { return nfiles(f, "badges") > 0 || has(a, "credentials"); } },
+      { id: "badges", label: "Licenses, insurance, certifications, awards", note: "trust badges", from: function (a, f) { return nfiles(f, "badges") > 0 || has(a, "credentials") || (a.use_existing_reviews === true && "site"); } },
       { id: "before_after", label: "Before/after photos", note: "if relevant", from: function (a, f) { return nfiles(f, "before_after") > 0; } }
     ]},
     { id: "info", title: "Business Info", items: [
       { id: "basics", label: "Legal name, phone, email, address, hours", from: function (a) { return has(a, "business_name") && has(a, "business_phone"); } },
       { id: "service_area", label: "Service area", note: "towns or counties", from: function (a) { return has(a, "service_area"); } },
       { id: "license_numbers", label: "License numbers", note: "if the trade requires them", from: function (a) { return has(a, "license_number") || has(a, "credentials"); } },
-      { id: "review_links", label: "Google Business Profile, Google reviews, Yelp/Angi/HomeAdvisor links", from: function (a) { return has(a, "google_business") || has(a, "google_reviews_link") || has(a, "other_review_sites"); } }
+      { id: "review_links", label: "Google Business Profile, Google reviews, Yelp/Angi/HomeAdvisor links", from: function (a) { return has(a, "google_business") || has(a, "google_reviews_link") || has(a, "other_review_sites") || (a.use_existing_reviews === true && "site"); } }
     ]},
     { id: "urls", title: "URLs", items: [
       { id: "instagram", label: "Instagram", from: function (a) { return has(a, "instagram"); } },
@@ -163,7 +166,7 @@
       { id: "x", label: "X", from: function (a) { return has(a, "x"); } },
       { id: "linkedin", label: "LinkedIn", from: function (a) { return has(a, "linkedin"); } },
       { id: "pinterest", label: "Pinterest", from: function (a) { return has(a, "pinterest"); } },
-      { id: "other_social", label: "Other social links", from: function (a) { return has(a, "youtube") || has(a, "other_links"); } },
+      { id: "other_social", label: "Other social links", from: function (a) { return has(a, "youtube") || has(a, "other_links") || (a.use_existing_social === true && "site"); } },
       { id: "booking", label: "Booking calendar link", note: "optional", from: function (a) { return has(a, "booking_link"); } }
     ]},
     { id: "access", title: "Access / Accounts", items: [
@@ -193,5 +196,12 @@
     return out;
   }
 
-  root.SGS_SCHEMA = { SECTIONS: SECTIONS, FILE_KINDS: FILE_KINDS, CHECKLIST: CHECKLIST, STAGES: STAGES, allFields: allFields };
+  /* "Use what's on my current site" checkboxes (one per section). */
+  var FROM_SITE = [
+    { id: "use_existing_logo", label: "Logo & icon" },
+    { id: "use_existing_media", label: "Photos & videos" },
+    { id: "use_existing_reviews", label: "Reviews & credentials" },
+    { id: "use_existing_social", label: "Social & online links" }
+  ];
+  root.SGS_SCHEMA = { FROM_SITE: FROM_SITE, SECTIONS: SECTIONS, FILE_KINDS: FILE_KINDS, CHECKLIST: CHECKLIST, STAGES: STAGES, allFields: allFields };
 })(typeof window !== "undefined" ? window : globalThis);

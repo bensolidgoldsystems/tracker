@@ -655,12 +655,23 @@
       '<div class="fld"><label for="mDraft">Draft site URL</label><input class="inp" type="url" id="mDraft" placeholder="https://...netlify.app" value="' + esc(l.draft_url || "") + '"></div>' +
       "</div>" +
 
-      '<div class="layout"><div>' + bannerPanel() + filesPanel() + answersPanels(a) + "</div>" +
+      '<div class="layout"><div>' + fromSitePanel(a) + bannerPanel() + filesPanel() + answersPanels(a) + "</div>" +
       '<aside class="side">' + checklistPanel(cs) +
       '<div class="panel"><h2>Internal notes</h2><textarea class="inp notes" id="mNotes" placeholder="Call notes, what they liked, changes to make...">' + esc(l.internal_notes || "") + "</textarea></div>" +
       "</aside></div>";
     view.innerHTML = html;
     wireLead();
+  }
+
+  // What they asked us to pull from their current website / social (plus anything they uploaded).
+  function fromSitePanel(a) {
+    var on = (S.FROM_SITE || []).filter(function (x) { return a[x.id] === true; });
+    if (!on.length) { return ""; }
+    var site = a.current_website || a.lp_website_url || "";
+    return '<div class="panel from-site"><h2>Pull from their current site</h2>' +
+      '<div class="chips">' + on.map(function (x) { return '<span class="badge gold">' + esc(x.label) + "</span>"; }).join(" ") + "</div>" +
+      '<p class="muted" style="font-size:13px;margin-top:10px">Take these from ' + (site ? linkify(site) : "their website") + (a.use_existing_media || a.use_existing_social ? " and their social media" : "") +
+      ", and use anything they added on the form too.</p></div>";
   }
 
   function answersPanels(a) {
@@ -671,6 +682,7 @@
       var rows = sec.fields.filter(function (f) { return f.type !== "note" && f.type !== "files"; }).map(function (f) {
         var v = a[f.id];
         var txt = Array.isArray(v) ? v.join(", ") : v === true ? "Yes" : (v || "");
+        if (f.type === "check" && v !== true) { txt = /^use_existing_/.test(f.id) ? "No" : ""; }
         return '<dl class="ans"><dt>' + esc(f.label) + "</dt>" +
           (txt ? "<dd>" + linkify(txt) + '</dd><button class="copy" data-copy="' + esc(txt) + '" title="Copy">⧉</button>' : '<dd class="none">—</dd><span></span>') + "</dl>";
       }).join("");
@@ -695,7 +707,6 @@
     }).join("");
     var link = (current.lead.answers || {}).photos_link;
     return '<div class="panel"><h2>Files <span class="muted" style="font-family:var(--body);font-size:13px">' + current.files.length + " files · " + fmtSize(total) + "</span></h2>" +
-      ((current.lead.answers || {}).use_existing_media === true ? '<p class="hintbox" style="font-size:14px;margin-bottom:8px">OK to use the photos and videos from their current website and social media.</p>' : "") +
       (link ? '<p style="font-size:14px;margin-bottom:8px">Photo link: ' + linkify(link) + "</p>" : "") +
       (body || '<p class="muted" style="font-size:14px">No files yet.</p>') +
       '<div class="kind"><h3>Add files</h3><div class="addfiles"><select class="inp" id="addKind">' +
@@ -770,7 +781,7 @@
           sec.items.map(function (it) {
             var st = cs.cl[it.id] || "", from = it.from && it.from(cs.a, cs.files);
             return '<div class="cl-item' + (st === "na" ? " na" : "") + '"><input type="checkbox" id="cl_' + it.id + '" data-cl="' + it.id + '"' + (st === "done" ? " checked" : "") + (st === "na" ? " disabled" : "") + ">" +
-              '<label for="cl_' + it.id + '">' + esc(it.label) + (from ? '<span class="from">provided</span>' : "") + (it.note ? "<small>" + esc(it.note) + "</small>" : "") + "</label>" +
+              '<label for="cl_' + it.id + '">' + esc(it.label) + (from ? '<span class="from">' + (from === "site" ? "from their site" : "provided") + "</span>" : "") + (it.note ? "<small>" + esc(it.note) + "</small>" : "") + "</label>" +
               '<button class="na-btn" data-na="' + it.id + '" title="Not needed for this site">N/A</button></div>';
           }).join("") + "</div>";
       }).join("") + "</div>";
@@ -1013,6 +1024,12 @@
     var bn = files.filter(function (x) { return x.kind === "banner"; })[0];
     out.push("- **Text preview banner:** " + (bn ? "`" + bannerExportName(bn) + "` (top of this zip; use as og:image / twitter:image)" : "_not added yet_"));
     out.push("- **Exported:** " + new Date().toLocaleString("en-US"), "");
+    var pull = (S.FROM_SITE || []).filter(function (x) { return a[x.id] === true; });
+    if (pull.length) {
+      out.push("## Pull from their current site", "", "The client asked us to take these from " + (a.current_website || a.lp_website_url || "their current website") + " (and their social media), and to also use anything they added on the form:", "");
+      pull.forEach(function (x) { out.push("- " + x.label); });
+      out.push("");
+    }
     S.SECTIONS.forEach(function (sec) {
       out.push("## " + sec.num + " " + sec.title, "");
       sec.fields.forEach(function (f) {
@@ -1033,7 +1050,7 @@
       out.push("### " + sec.title);
       sec.items.forEach(function (it) {
         var st = cs.cl[it.id], from = it.from && it.from(a, files);
-        out.push("- [" + (st === "done" ? "x" : " ") + "] " + it.label + (st === "na" ? " — N/A" : "") + (from ? " _(provided)_" : "") + (it.note ? " — " + it.note : ""));
+        out.push("- [" + (st === "done" ? "x" : " ") + "] " + it.label + (st === "na" ? " — N/A" : "") + (from ? (from === "site" ? " _(take from their current site)_" : " _(provided)_") : "") + (it.note ? " — " + it.note : ""));
       });
       out.push("");
     });
