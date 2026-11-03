@@ -308,9 +308,7 @@
   }
   async function gatherPackage(ctx, from, to) {
     var d = await window.SGSReports.data();
-    var keys = monthsBetween(from, to), checks = [];
-    for (var i = 0; i < keys.length; i++) { checks.push(await window.SGSStatements.compute(keys[i])); }
-    return { ad: await gather({ d: d, T: ctx.T }, from, to), checks: checks, files: await window.SGSStatements.files(from, to) };
+    return { ad: await gather({ d: d, T: ctx.T }, from, to), files: await window.SGSStatements.files(from, to) };
   }
   async function buildChecks(checks, from, to) {
     var X = window.ExcelJS, S = window.SGSStatements;
@@ -381,15 +379,10 @@
     var range = from + (to !== from ? "_to_" + to : "");
     var zip = new window.JSZip();
     zip.file("SGS-Meta-Ad-Spend_" + range + ".xlsx", await build(data.ad, from, to));
-    zip.file("SGS-Statement-Checks_" + range + ".xlsx", await buildChecks(data.checks, from, to));
     for (var i = 0; i < data.files.length; i++) {
       var f = data.files[i], s = f.statement, name = window.SGSStatements.acctName(f.account).replace(/[\\/:*?"<>|·]+/g, "").replace(/\s+/g, " ").trim();
-      zip.file("Statements/" + name + "/" + name + " " + s.period_start + " to " + s.period_end + ".pdf", await window.SGSStatements.download(s));
+      zip.file("Statements/" + name + "/" + name + " - " + long((s.period_end || s.month).slice(0, 7)) + ".pdf", await window.SGSStatements.download(s));
     }
-    zip.file("README.txt", "Solid Gold Systems - month-end package, " + (from === to ? long(from) : long(from) + " to " + long(to)) + "\r\n\r\n" +
-      "SGS-Meta-Ad-Spend: Meta ad charges on SGS's cards, by month (our own ads and client ads we pay for), every charge with Meta's transaction ID.\r\n" +
-      "SGS-Statement-Checks: how the bank and card statements line up with Tracker (Meta charges, Stripe payouts, card payments) and anything that needs a look.\r\n" +
-      "Statements: the bank and credit card statement PDFs covering these months (" + data.files.length + " files).\r\n");
     return zip.generateAsync({ type: "blob", compression: "DEFLATE" });
   }
 
@@ -431,7 +424,7 @@
 
   function openPackage(ctx) {
     rangeModal(ctx, { title: "Month-end package", file: "SGS-Month-End", ext: "zip", done: "Month-end package downloaded", button: "Download zip",
-      blurb: "One zip for the accountant: the ad spend Excel, the bank and credit card statements for these months, and how the statements line up with Tracker.",
+      blurb: "One zip for the accountant: the ad spend Excel and the bank and credit card statements for these months (one per account per month, by closing date).",
       gather: function (f, t) { return gatherPackage(ctx, f, t); }, build: buildPackage });
   }
 

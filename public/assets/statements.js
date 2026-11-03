@@ -443,10 +443,11 @@
     st.statements.push({ id: sid, account_id: a.id, month: month, period_start: p.periodStart, period_end: p.periodEnd, file_path: path });
   }
 
-  // Statements overlapping a range of months, for the month-end package.
+  // The month-end package: one statement per account per month, the one that closes in that month
+  // (how the bank files them: the card statement closing Oct 2 is October's).
   async function files(from, to) {
     await load(true);
-    return overlapping(from + "-01", lastDay(to)).map(function (s) {
+    return st.statements.filter(function (s) { var k = (s.period_end || s.month).slice(0, 7); return k >= from && k <= to; }).map(function (s) {
       return { statement: s, account: byId(st.accounts, s.account_id) };
     }).sort(function (a, b) { return (a.account.sort - b.account.sort) || (a.statement.period_end < b.statement.period_end ? -1 : 1); });
   }
