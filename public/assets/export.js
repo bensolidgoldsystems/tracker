@@ -296,13 +296,110 @@
     return wb.xlsx.writeBuffer();
   }
 
+  /* ---------- month-end package: ad spend Excel + statement PDFs + statement checks ---------- */
+  var JSZIP = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+  function loadZip() {
+    if (window.JSZip) { return Promise.resolve(); }
+    return new Promise(function (ok, bad) {
+      var sc = document.createElement("script"); sc.src = JSZIP; sc.onload = ok;
+      sc.onerror = function () { bad(new Error("Couldn't load the zip tool. Check your connection and try again.")); };
+      document.head.appendChild(sc);
+    });
+  }
+  async function gatherPackage(ctx, from, to) {
+    var d = await window.SGSReports.data();
+    var keys = monthsBetween(from, to), checks = [];
+    for (var i = 0; i < keys.length; i++) { checks.push(await window.SGSStatements.compute(keys[i])); }
+    return { ad: await gather({ d: d, T: ctx.T }, from, to), checks: checks, files: await window.SGSStatements.files(from, to) };
+  }
+  async function buildChecks(checks, from, to) {
+    var X = window.ExcelJS, S = window.SGSStatements;
+    var wb = new X.Workbook();
+    wb.creator = "Solid Gold Systems Tracker"; wb.created = new Date(); wb.company = "Solid Gold Systems";
+    var logoId = null;
+    try { logoId = wb.addImage({ buffer: await (await fetch("/assets/logo.png", { cache: "force-cache" })).arrayBuffer(), extension: "png" }); } catch (e) { /* optional */ }
+    var sub = (from === to ? long(from) : long(from) + " – " + long(to)) + "  ·  Bank & card statements  ·  Generated " + todayLong();
+    function sheet(name, title, widths, heads, rows, rightFrom, opts) {
+      opts = opts || {};
+      var ws = wb.addWorksheet(name, { views: [{ showGridLines: false, state: "frozen", ySplit: 7 }], properties: { tabColor: { argb: opts.tab || GOLD } },
+        pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+      ws.columns = widths.map(function (w) { return { width: w }; });
+      banner(ws, logoId, widths.length, title, sub, opts.at || 2);
+      header(ws, 7, heads, rightFrom);
+      rows.forEach(function (r, i) {
+        var row = ws.getRow(8 + i);
+        r.forEach(function (v, j) { var c = row.getCell(j + 1); c.value = v; });
+        bodyRow(ws, 8 + i, heads.length, i % 2 === 1);
+        (opts.money || []).forEach(function (j) { money(row.getCell(j)); });
+        (opts.dates || []).forEach(function (j) { var c = row.getCell(j); if (c.value instanceof Date) { c.numFmt = "mmm d, yyyy"; c.alignment = { vertical: "middle", horizontal: "left", indent: 1 }; } });
+        if (opts.flag && opts.flag(r)) { for (var k = 1; k <= heads.length; k++) { row.getCell(k).font = { size: 10.5, color: { argb: "FFB3261E" }, bold: k === 1 }; } }
+      });
+      if (!rows.length) { var e = ws.getCell(8, 1); e.value = opts.empty || "Nothing here."; e.font = { italic: true, color: { argb: GREY } }; }
+      else if (opts.filter) { ws.autoFilter = { from: { row: 7, column: 1 }, to: { row: 7 + rows.length, column: heads.length } }; }
+      ws.headerFooter.oddFooter = "&L&8Solid Gold Systems · Statement checks&R&8Page &P of &N";
+      return ws;
+    }
+    var sum = checks.map(function (c) {
+      var missing = c.coverage.filter(function (x) { return !x.ok; }).map(function (x) { return S.acctName(x.account) + (x.statements.length ? " (part)" : ""); });
+      return [long(c.month), missing.length ? "Missing: " + missing.join(", ") : "All uploaded",
+        c.meta.matched.length, c.meta.cardOnly.length + c.meta.trackerOnly.length,
+        c.stripe.matched.length, c.stripe.bankOnly.length + c.stripe.stripeOnly.length,
+        c.payments.matched.length, c.payments.bankOnly.length + c.payments.cardOnly.length,
+        c.unlabeled.length];
+    });
+    var ws = sheet("Summary", "Statement checks", [18, 46, 11, 11, 11, 11, 12, 12, 11],
+      ["Month", "Statements", "Meta ✓", "Meta ✗", "Stripe ✓", "Stripe ✗", "Card pay ✓", "Card pay ✗", "No label"], sum, 3,
+      { flag: function (r) { return r[3] || r[5] || r[7]; } });
+    note(ws, 9 + sum.length, "✓ = lines up with Tracker, ✗ = needs a look (listed on the To check sheet). Meta = Meta ad charges on the cards vs. the charges Tracker has for client ads and SGS's own ads. Stripe = Stripe payouts vs. Stripe deposits in the bank. Card pay = payments from the bank vs. payments received on the cards. No label = other statement lines nobody has labeled yet.", 9);
+
+    var issues = [];
+    checks.forEach(function (c) {
+      var mm = long(c.month);
+      c.meta.cardOnly.forEach(function (x) { issues.push([mm, "Meta charge on the card, not in Tracker", asDate(x.date), "Card ··" + x.card, x.txn.description, -x.amt]); });
+      c.meta.trackerOnly.forEach(function (x) { issues.push([mm, "Meta charge in Tracker, not on the card", asDate(x.date), "Card ··" + x.card, x.who, -x.amt]); });
+      c.stripe.bankOnly.forEach(function (x) { issues.push([mm, "Stripe deposit with no matching payout", asDate(x.date), "Bank", x.txn.description, x.amt]); });
+      c.stripe.stripeOnly.forEach(function (x) { issues.push([mm, "Stripe payout not in the bank", asDate(x.date), "Bank", x.id, x.amt]); });
+      c.payments.bankOnly.forEach(function (x) { issues.push([mm, "Card payment from the bank, not on the card", asDate(x.date), "Bank", x.txn.description, -x.amt]); });
+      c.payments.cardOnly.forEach(function (x) { issues.push([mm, "Card payment not from this bank", asDate(x.date), "Card ··" + x.card, x.txn.description, x.amt]); });
+      c.unlabeled.forEach(function (t) { issues.push([mm, "Needs a label", asDate(t.txn_date), S.acctName(c.acct[t.account_id]), t.description, Number(t.amount)]); });
+    });
+    sheet("To check", "Needs a look", [16, 38, 14, 22, 48, 14], ["Month", "Check", "Date", "Account", "Detail", "Amount"], issues, 6,
+      { money: [6], dates: [3], filter: true, tab: INK, empty: "Everything lines up." });
+
+    var lines = [];
+    checks.forEach(function (c) { c.txns.forEach(function (t) { lines.push([asDate(t.txn_date), S.acctName(c.acct[t.account_id]), t.description, t._what || "Needs a label", Number(t.amount)]); }); });
+    sheet("All lines", "Every statement line", [14, 26, 52, 32, 14], ["Date", "Account", "Statement line", "What it is", "Amount"], lines, 5,
+      { money: [5], dates: [1], filter: true, tab: GOLD_DIM });
+
+    var byLabel = [];
+    checks.forEach(function (c) { c.labeled.forEach(function (l) { byLabel.push([long(c.month), l.label, l.n, Math.round(l.sum * 100) / 100]); }); });
+    sheet("By label", "Other spending by label", [18, 34, 10, 16], ["Month", "Label", "Lines", "Total"], byLabel, 3, { money: [4], tab: INK });
+    return wb.xlsx.writeBuffer();
+  }
+  async function buildPackage(data, from, to) {
+    await loadZip();
+    var range = from + (to !== from ? "_to_" + to : "");
+    var zip = new window.JSZip();
+    zip.file("SGS-Meta-Ad-Spend_" + range + ".xlsx", await build(data.ad, from, to));
+    zip.file("SGS-Statement-Checks_" + range + ".xlsx", await buildChecks(data.checks, from, to));
+    for (var i = 0; i < data.files.length; i++) {
+      var f = data.files[i], s = f.statement, name = window.SGSStatements.acctName(f.account).replace(/[\\/:*?"<>|·]+/g, "").replace(/\s+/g, " ").trim();
+      zip.file("Statements/" + name + "/" + name + " " + s.period_start + " to " + s.period_end + ".pdf", await window.SGSStatements.download(s));
+    }
+    zip.file("README.txt", "Solid Gold Systems - month-end package, " + (from === to ? long(from) : long(from) + " to " + long(to)) + "\r\n\r\n" +
+      "SGS-Meta-Ad-Spend: Meta ad charges on SGS's cards, by month (our own ads and client ads we pay for), every charge with Meta's transaction ID.\r\n" +
+      "SGS-Statement-Checks: how the bank and card statements line up with Tracker (Meta charges, Stripe payouts, card payments) and anything that needs a look.\r\n" +
+      "Statements: the bank and credit card statement PDFs covering these months (" + data.files.length + " files).\r\n");
+    return zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+  }
+
   /* ---------- modals ---------- */
   function rangeModal(ctx, o) {
     var T = ctx.T, $ = T.$;
     T.modal("<h2>" + o.title + "</h2><p class='muted' style='margin:-8px 0 14px'>" + o.blurb + "</p>" +
       "<div class='g3' style='grid-template-columns:1fr 1fr'><div class='fld'><label for='exFrom'>From</label><input class='inp' type='month' id='exFrom' value='" + ctx.from + "'></div>" +
       "<div class='fld'><label for='exTo'>To</label><input class='inp' type='month' id='exTo' value='" + ctx.to + "'></div></div>" +
-      "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='exGo'>Download Excel</button></div>");
+      "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='exGo'>" + (o.button || "Download Excel") + "</button></div>");
     $("mCancel").onclick = T.closeModal;
     $("exGo").onclick = async function () {
       var from = $("exFrom").value, to = $("exTo").value, btn = this;
@@ -311,14 +408,14 @@
       btn.disabled = true; btn.textContent = "Building...";
       try {
         var res = await Promise.all([loadLib(), o.gather(from, to)]);
-        var buf = await o.build(res[1], from, to);
+        var out = await o.build(res[1], from, to);
         var a = document.createElement("a");
-        a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-        a.download = o.file + "_" + from + (to !== from ? "_to_" + to : "") + ".xlsx";
+        a.href = URL.createObjectURL(out instanceof Blob ? out : new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        a.download = o.file + "_" + from + (to !== from ? "_to_" + to : "") + "." + (o.ext || "xlsx");
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
         T.closeModal(); T.toast(o.done);
-      } catch (e) { T.fail(e); btn.disabled = false; btn.textContent = "Download Excel"; }
+      } catch (e) { T.fail(e); btn.disabled = false; btn.textContent = o.button || "Download Excel"; }
     };
   }
   function open(ctx) {
@@ -332,5 +429,11 @@
       gather: ctx.tables, build: buildFinance });
   }
 
-  window.SGSExport = { open: open, openFinance: openFinance, _gather: gather, _build: build, _buildFinance: buildFinance, _months: monthsBetween };
+  function openPackage(ctx) {
+    rangeModal(ctx, { title: "Month-end package", file: "SGS-Month-End", ext: "zip", done: "Month-end package downloaded", button: "Download zip",
+      blurb: "One zip for the accountant: the ad spend Excel, the bank and credit card statements for these months, and how the statements line up with Tracker.",
+      gather: function (f, t) { return gatherPackage(ctx, f, t); }, build: buildPackage });
+  }
+
+  window.SGSExport = { open: open, openFinance: openFinance, openPackage: openPackage, _buildChecks: buildChecks, _gather: gather, _build: build, _buildFinance: buildFinance, _months: monthsBetween };
 })();

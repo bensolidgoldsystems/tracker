@@ -68,3 +68,11 @@ grant update (voided_at, void_reason, voided_by) on public.ghl_contacts to authe
 -- "team reads X" (is_team) and "editors change X" (can_write); leads/intake need the leads tab,
 -- client_contacts the clients tab, meta_leads/ghl_contacts the lead tabs, meta_ad_daily sgs/finance.
 -- Full SQL: Supabase migration history (list_migrations -> per_user_tab_access).
+
+-- Finance > Statements (Nov 3 2026, migration finance_statements; applied live).
+-- fin_accounts (bank/card, name, last4), statements (one per account per closing month, PDF in the private
+-- "statements" bucket, period, opening/closing balance), statement_txns (amount: in > 0, out < 0, label),
+-- fin_rules (merchant prefix -> label). RLS: read = can_see('finance'); change = can_see('finance') and can_write().
+-- Storage bucket "statements": PDFs only, 50 MB, same rules.
+-- Seeded: Chase checking ··0697, Chase card (Ben) ··5978, Chase card (Alex) ··0719, and starter labels
+-- (software subscriptions, Hiscox insurance, card fee, Zelle to/from 633 Studios / Jake Moscato).

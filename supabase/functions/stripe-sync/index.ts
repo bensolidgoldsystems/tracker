@@ -296,5 +296,18 @@ Deno.serve(async (req) => {
   if (!fromCron && !(await isTeam((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "")))) return json(req, 403, { error: "Not allowed" });
   let body: any = {};
   try { body = await req.json(); } catch (_) { /* empty */ }
+  // Read-only: Stripe payouts to the bank between two dates (Finance > Statements checks).
+  if (body.action === "payouts") {
+    if (!Deno.env.get("STRIPE_SECRET_KEY")) return json(req, 200, { ok: false, configured: false });
+    const D = /^\d{4}-\d{2}-\d{2}$/;
+    if (!D.test(String(body.since || "")) || !D.test(String(body.until || ""))) return json(req, 400, { error: "Pick dates" });
+    const from = Math.floor(new Date(body.since + "T00:00:00-05:00").getTime() / 1000) - 7 * 86400;
+    const to = Math.floor(new Date(body.until + "T23:59:59-05:00").getTime() / 1000) + 86400;
+    try {
+      const bts = await stripeAll("/balance_transactions", { type: "payout", "created[gte]": String(from), "created[lte]": String(to) });
+      const payouts = bts.map((bt: any) => ({ id: String(bt.source || bt.id), amount: -bt.amount / 100, created: nyDate(bt.created), arrival: nyDate(bt.available_on || bt.created), description: bt.description || "" }));
+      return json(req, 200, { ok: true, payouts });
+    } catch (e) { return json(req, 200, { ok: false, error: String((e as Error).message || e).slice(0, 300) }); }
+  }
   return json(req, 200, await runSync(!!body.dry));
 });

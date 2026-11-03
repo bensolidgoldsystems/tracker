@@ -521,7 +521,7 @@
     var partnerName = (d.partners[0] || {}).name || "partner";
     el.innerHTML = '<div class="cl-wrap rep">' +
       '<div class="cl-head"><div><h1>Finance</h1><p class="muted">' + esc(y) + ". " + (ro() ? "Click any month to see what's in it." : "Click any month to see or add amounts.") + "</p></div>" +
-        '<div class="cl-actions"><button class="btn" id="finExportAll" title="Excel file of everything on this page, by month">Export Finance</button><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
+        '<div class="cl-actions"><a class="btn" href="#finance/statements">Statements</a><button class="btn" id="finPackage" title="Zip for the accountant: ad spend Excel, bank and card statements, and the statement checks">Month-end package</button><button class="btn" id="finExportAll" title="Excel file of everything on this page, by month">Export Finance</button><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
       '<div class="fin-range"><div class="seg" role="group" aria-label="Time frame">' + RANGES.map(function (r) {
         return '<button class="seg-b' + (view.range === r[0] ? " on" : "") + '" data-frange="' + r[0] + '">' + r[1] + "</button>";
       }).join("") + "</div>" +
@@ -552,6 +552,7 @@
     });
     el.querySelectorAll("[data-add]").forEach(function (b) { b.onclick = function () { addAmount(b.dataset.add, el); }; });
     $("finExport").onclick = function () { window.SGSExport.open({ d: d, T: T, from: keys[0], to: keys[keys.length - 1] }); };
+    $("finPackage").onclick = function () { window.SGSExport.openPackage({ T: T, from: keys[keys.length - 1], to: keys[keys.length - 1] }); };
     $("finExportAll").onclick = function () { window.SGSExport.openFinance({ T: T, from: keys[0], to: keys[keys.length - 1], tables: financeTables }); };
     el.querySelectorAll("[data-frange]").forEach(function (b) {
       b.onclick = function () {
@@ -946,6 +947,7 @@
   window.SGSReports = {
     init: function (helpers) { T = helpers; },
     invalidate: function () { loadedAt = 0; },
+    data: async function () { await load(); return d; },
     overview: overview, reports: reports, metaSettings: metaSettings, clientPanel: clientPanel, qboSettings: qboSettings
   };
 })();

@@ -388,6 +388,7 @@
     else if (/^#sgs/.test(h)) { show("sgsView"); window.SGSAdLeads.route(h, $("sgsView")); }
     else if (/^#adleads/.test(h)) { show("adLeadsView"); window.SGSAdLeads.route(h, $("adLeadsView")); }
     else if (/^#ppl/.test(h)) { show("pplView"); window.SGSPpl.route(h, $("pplView")); }
+    else if (/^#finance\/statements/.test(h)) { show("reportsView"); window.SGSStatements.route(h, $("reportsView")); }
     else if (/^#(reports|finance)/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
     else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
     else { show("overviewView"); window.SGSReports.overview($("overviewView")); }
@@ -1115,6 +1116,7 @@
   window.SGSReports.init(shared);
   window.SGSPpl.init(shared);
   window.SGSAdLeads.init(shared);
+  window.SGSStatements.init(shared);
 
   /* ---------- start ---------- */
   sb.auth.onAuthStateChange(function (event) {
