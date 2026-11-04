@@ -31,6 +31,7 @@
     else { prompt("Copy:", text); }
   }
   function isImage(f) { return /^image\/(jpeg|png|gif|webp|svg\+xml|avif)$/.test(f.mime) || /\.(jpe?g|png|gif|webp|svg|avif)$/i.test(f.name); }
+  function isPdf(f) { return /^application\/pdf$/.test(f.mime) || /\.(pdf|ai)$/i.test(f.name); }   // Illustrator files usually carry a PDF copy
   function isVideo(f) { return /^video\//.test(f.mime) || /\.(mp4|mov|webm|m4v)$/i.test(f.name); }
   function kindLabel(id) { var k = S.FILE_KINDS.filter(function (x) { return x.id === id; })[0]; return k ? k.label : id; }
   function stageLabel(id) { var s = S.STAGES.filter(function (x) { return x.id === id; })[0]; return s ? s.label : id; }
@@ -890,6 +891,33 @@
   }
 
   /* ---------- viewer ---------- */
+  // PDFs (and Illustrator files saved with PDF content) are drawn page by page with pdf.js, so they
+  // preview the same on phones, where browsers won't show a PDF inside the page.
+  var viewGen = 0, PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+  async function renderPdf(url, box, current) {
+    try {
+      if (!window.pdfjsLib) {
+        await new Promise(function (ok, bad) { var sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js"; sc.onload = ok; sc.onerror = function () { bad(new Error("load")); }; document.head.appendChild(sc); });
+      }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
+      var pdf = await window.pdfjsLib.getDocument({ url: url }).promise;
+      if (!current()) { return; }
+      box.innerHTML = "";
+      var max = Math.min(pdf.numPages, 30), width = Math.min(box.clientWidth || 900, 1000), ratio = window.devicePixelRatio || 1;
+      for (var n = 1; n <= max; n++) {
+        var page = await pdf.getPage(n);
+        if (!current()) { return; }
+        var vp = page.getViewport({ scale: 1 }), scale = width / vp.width, view = page.getViewport({ scale: scale * ratio });
+        var c = document.createElement("canvas");
+        c.width = view.width; c.height = view.height; c.style.width = Math.floor(view.width / ratio) + "px";
+        box.appendChild(c);
+        await page.render({ canvasContext: c.getContext("2d"), viewport: view }).promise;
+      }
+      if (pdf.numPages > max) { var more = document.createElement("p"); more.className = "muted"; more.textContent = "Showing the first " + max + " of " + pdf.numPages + " pages. Download to see the rest."; box.appendChild(more); }
+    } catch (e) {
+      if (current()) { box.innerHTML = '<p class="muted">No preview for this file. Download it to open.</p>'; }
+    }
+  }
   function openViewer(path) {
     var list = current.files, i = list.findIndex(function (f) { return f.path === path; });
     var v = $("viewer");
@@ -897,7 +925,9 @@
       var f = list[i], url = current.urls[f.path] || "";
       var media = isImage(f) ? '<img src="' + esc(url) + '" alt="' + esc(f.name) + '">'
         : isVideo(f) ? '<video src="' + esc(url) + '" controls autoplay></video>'
+        : isPdf(f) ? '<div class="pdf-pages" id="vPdf"><p class="muted">Loading preview...</p></div>'
         : '<p class="muted">No preview for this file type.</p>';
+      var gen = ++viewGen;
       v.innerHTML = '<div class="viewer-bar"><span>' + esc(kindLabel(f.kind)) + " · " + esc(f.name) + " · " + fmtSize(f.size) + "</span>" +
         '<span style="display:flex;gap:8px"><a class="btn sm" href="' + esc(url) + '&download=' + encodeURIComponent(f.name) + '">Download</a>' +
         '<button class="btn sm danger" id="vDel">Delete</button><button class="btn sm" id="vClose">Close</button></span></div>' +
@@ -906,8 +936,9 @@
       $("vClose").onclick = close;
       $("vDel").onclick = function () { deleteFiles([f]).then(close); };
       if ($("vPrev")) { $("vPrev").onclick = function () { i = (i - 1 + list.length) % list.length; show(); }; $("vNext").onclick = function () { i = (i + 1) % list.length; show(); }; }
+      if (isPdf(f) && url) { renderPdf(url, $("vPdf"), function () { return gen === viewGen; }); }
     }
-    function close() { v.classList.add("hidden"); v.innerHTML = ""; document.removeEventListener("keydown", keys); }
+    function close() { viewGen++; v.classList.add("hidden"); v.innerHTML = ""; document.removeEventListener("keydown", keys); }
     function keys(e) {
       if (e.key === "Escape") { close(); }
       if (e.key === "ArrowLeft" && $("vPrev")) { $("vPrev").click(); }
