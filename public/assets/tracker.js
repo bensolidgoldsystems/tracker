@@ -703,7 +703,8 @@
           var url = current.urls[f.path], inner;
           if (url && isImage(f)) { inner = '<img loading="lazy" alt="" src="' + esc(url) + '">'; }
           else if (url && isVideo(f)) { inner = '<video muted preload="metadata" src="' + esc(url) + '#t=0.5"></video>'; }
-          else { inner = '<div class="doc">' + esc((f.name.split(".").pop() || "file").toUpperCase()) + "</div>"; }
+          else if (url && isPdf(f) && pdfThumbs[f.path]) { inner = '<img alt="" class="pdf-thumb" src="' + pdfThumbs[f.path] + '">'; }
+          else { inner = '<div class="doc"' + (url && isPdf(f) ? ' data-pdfthumb="' + esc(f.path) + '"' : "") + ">" + esc((f.name.split(".").pop() || "file").toUpperCase()) + "</div>"; }
           return '<div class="fthumb" data-path="' + esc(f.path) + '" tabindex="0" role="button" aria-label="Open ' + esc(f.name) + '">' + inner + '<div class="fname">' + esc(f.name) + "</div></div>";
         }).join("") + "</div></div>";
     }).join("");
@@ -789,7 +790,33 @@
       }).join("") + "</div>";
   }
 
+  // First page of each PDF as its tile picture (drawn once per file, kept for the session).
+  var pdfThumbs = {};
+  async function drawPdfThumbs() {
+    var tiles = Array.prototype.slice.call(document.querySelectorAll("[data-pdfthumb]"));
+    if (!tiles.length) { return; }
+    try { await pdfReady(); } catch (e) { return; }
+    for (var i = 0; i < tiles.length; i++) {
+      var el = tiles[i], path = el.dataset.pdfthumb, url = current && current.urls[path];
+      if (!url || !el.isConnected) { continue; }
+      try {
+        if (!pdfThumbs[path]) {
+          var pdf = await window.pdfjsLib.getDocument({ url: url }).promise;
+          var page = await pdf.getPage(1), vp = page.getViewport({ scale: 1 }), scale = 320 / Math.max(vp.width, vp.height);
+          var view = page.getViewport({ scale: scale }), c = document.createElement("canvas");
+          c.width = view.width; c.height = view.height;
+          var ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+          await page.render({ canvasContext: ctx, viewport: view }).promise;
+          pdfThumbs[path] = c.toDataURL("image/jpeg", 0.85);
+          pdf.destroy();
+        }
+        if (el.isConnected) { var img = document.createElement("img"); img.alt = ""; img.className = "pdf-thumb"; img.src = pdfThumbs[path]; el.replaceWith(img); }
+      } catch (e) { /* keep the PDF label */ }
+    }
+  }
+
   function wireLead() {
+    drawPdfThumbs();
     var l = current.lead;
     $("mStage").addEventListener("change", function (e) { saveLead({ stage: e.target.value }); });
     $("mStart").addEventListener("change", function (e) { saveLead({ start_date: e.target.value || null }); });
@@ -894,12 +921,15 @@
   // PDFs (and Illustrator files saved with PDF content) are drawn page by page with pdf.js, so they
   // preview the same on phones, where browsers won't show a PDF inside the page.
   var viewGen = 0, PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+  async function pdfReady() {
+    if (!window.pdfjsLib) {
+      await new Promise(function (ok, bad) { var sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js"; sc.onload = ok; sc.onerror = function () { bad(new Error("load")); }; document.head.appendChild(sc); });
+    }
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
+  }
   async function renderPdf(url, box, current) {
     try {
-      if (!window.pdfjsLib) {
-        await new Promise(function (ok, bad) { var sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js"; sc.onload = ok; sc.onerror = function () { bad(new Error("load")); }; document.head.appendChild(sc); });
-      }
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
+      await pdfReady();
       var pdf = await window.pdfjsLib.getDocument({ url: url }).promise;
       if (!current()) { return; }
       box.innerHTML = "";
