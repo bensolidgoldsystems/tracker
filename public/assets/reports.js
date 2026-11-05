@@ -525,7 +525,7 @@
     var partnerName = (d.partners[0] || {}).name || "partner";
     el.innerHTML = '<div class="cl-wrap rep">' +
       '<div class="cl-head"><div><h1>Finance</h1><p class="muted">' + esc(y) + ". " + (ro() ? "Click any month to see what's in it." : "Click any month to see or add amounts.") + "</p></div>" +
-        '<div class="cl-actions">' + (d.pnl ? '<button class="btn" id="finQbo" title="Pull the latest from QuickBooks now (it also updates on its own every hour)">Refresh QuickBooks</button>' : "") + '<a class="btn" href="#finance/statements">Statements</a><button class="btn" id="finPackage" title="Zip for the accountant: ad spend Excel, bank and card statements, and the statement checks">Month-end package</button><button class="btn" id="finExportAll" title="Excel file of everything on this page, by month">Export Finance</button><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
+        '<div class="cl-actions">' + '<a class="btn" href="#finance/statements">Statements</a><button class="btn" id="finPackage" title="Zip for the accountant: ad spend Excel, bank and card statements, and the statement checks">Month-end package</button><button class="btn" id="finExportAll" title="Excel file of everything on this page, by month">Export Finance</button><button class="btn gold" id="finExport" title="Excel file of Meta ad charges SGS paid, by month">Export ad spend</button></div></div>' +
       '<div class="fin-range"><div class="seg" role="group" aria-label="Time frame">' + RANGES.map(function (r) {
         return '<button class="seg-b' + (view.range === r[0] ? " on" : "") + '" data-frange="' + r[0] + '">' + r[1] + "</button>";
       }).join("") + "</div>" +
@@ -563,7 +563,7 @@
           if (r && r.ok === false) { T.toast(r.message || "Problem updating QuickBooks", 6000); }
           await load(true); drawReports(el); liveBalances();
           if (!r || r.ok !== false) { T.toast("QuickBooks updated"); }
-        } catch (e) { T.fail(e); btn.disabled = false; btn.textContent = "Refresh QuickBooks"; }
+        } catch (e) { T.fail(e); btn.disabled = false; btn.textContent = "Refresh now"; }
       };
     }
     $("finExport").onclick = function () { window.SGSExport.open({ d: d, T: T, from: keys[0], to: keys[keys.length - 1] }); };
@@ -901,7 +901,8 @@
       "<thead><tr><th class='sticky'>Profit &amp; loss</th><th class='st'></th>" + keys.map(function (k) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + lbl(k) + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
     var note = hasQbo ? "Income, client ad spend and Stripe fees come from Tracker. All other expenses come from QuickBooks" + (p.company_name ? " (" + esc(p.company_name) + ")" : "") +
         ", updated every hour" + (p.fetched_at ? ", last " + esc(new Date(p.fetched_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") +
-        ". All Meta ad spend comes straight from Meta (client ad spend above, SGS's own ads under Expenses), so QuickBooks' Client Meta Ad Spend and Advertising & marketing accounts are left out." + (fees.some(Boolean) ? "" : " Stripe fees show once the Stripe key can read balances.")
+        '. <button class="linkbtn" id="finQbo" title="Pull the latest from QuickBooks now">Refresh now</button>' +
+        " All Meta ad spend comes straight from Meta (client ad spend above, SGS's own ads under Expenses), so QuickBooks' Client Meta Ad Spend and Advertising & marketing accounts are left out." + (fees.some(Boolean) ? "" : " Stripe fees show once the Stripe key can read balances.")
       : (p && p.ok === false ? "QuickBooks had a problem: " + esc(p.message) + ". Reconnect it in Settings. " : "") + 'Connect QuickBooks in <a href="#settings">Settings</a> to add your other expenses.';
     return '<section class="rep-sec" id="secPnl"><div class="rep-h"><h2>Profit &amp; loss</h2></div><p class="muted rep-sub">' + note + "</p>" +
       '<div class="sheet-wrap"><table class="sheet pl">' + thead + "<tbody>" + body + "</tbody></table></div></section>";

@@ -608,3 +608,11 @@ label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 .sheet tfoot tr.gen th,.sheet tfoot tr.gen td{font-weight:500}
 .sheet tfoot tr.netp th,.sheet tfoot tr.netp td{color:var(--gold)}
 .sheet tfoot tr td.neg,.sheet tfoot tr.netp td.neg{color:var(--bad)}
+/* Finance header: one tidy row of actions; QuickBooks refresh sits in the P&L note */
+.rep .cl-head{flex-wrap:wrap;align-items:flex-start}
+.rep .cl-head>div:first-child{flex:1 1 320px}
+.rep .cl-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.rep .cl-actions .btn{white-space:nowrap}
+#finQbo{color:var(--gold);font-size:inherit;padding:0 2px;cursor:pointer}
+#finQbo:disabled{color:var(--muted);cursor:default}
+@media (max-width:700px){.rep .cl-actions{justify-content:flex-start;width:100%}}
