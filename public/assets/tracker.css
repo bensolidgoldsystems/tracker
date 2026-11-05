@@ -603,3 +603,8 @@ label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 .ans.det.wide{grid-template-columns:minmax(0,1fr)}
 .ans.det.wide dd{line-height:1.5}
 @media (max-width:720px){.ans.det{grid-template-columns:110px minmax(0,1fr)}.ans.det dt{grid-column:auto}.ans.det.wide dt{grid-column:1/-1}}
+/* Summary: Gross -> General expenses -> Net profit */
+.sheet tfoot tr.gross th,.sheet tfoot tr.gross td,.sheet tfoot tr.gen th,.sheet tfoot tr.gen td{border-bottom:1px solid var(--line)}
+.sheet tfoot tr.gen th,.sheet tfoot tr.gen td{font-weight:500}
+.sheet tfoot tr.netp th,.sheet tfoot tr.netp td{color:var(--gold)}
+.sheet tfoot tr td.neg,.sheet tfoot tr.netp td.neg{color:var(--bad)}

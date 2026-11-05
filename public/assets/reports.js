@@ -488,12 +488,14 @@
 
     // Summary
     var sumKeys = keys.map(monthTotals);
+    var gen = generalExpenses(keys, sumKeys.map(function (t) { return t.payout; }));
     function sumLine(label, f, cls) {
       var tot = 0;
       return "<tr class='" + (cls || "") + "'><th class='sticky'>" + esc(label) + "</th><td class='st'></td>" + sumKeys.map(function (t, i) {
-        var v = f(t); tot += v;
-        return "<td" + (keys[i] === curKey ? " class='now'" : "") + ">" + (v ? money(v) : "") + "</td>";
-      }).join("") + "<td class='tot'>" + money(tot) + "</td></tr>";
+        var v = f(t, i); tot += v;
+        var cl = (keys[i] === curKey ? "now " : "") + (v < -0.004 && /gross|netp/.test(cls || "") ? "neg" : "");
+        return "<td" + (cl.trim() ? " class='" + cl.trim() + "'" : "") + ">" + (v ? money(v) : "") + "</td>";
+      }).join("") + "<td class='tot" + (tot < -0.004 && /gross|netp/.test(cls || "") ? " neg" : "") + "'>" + money(tot) + "</td></tr>";
     }
     var summary = head("Month") + "<tbody>" +
       sumLine("Revenue (retainers + one-time)", function (t) { return t.revenue; }) +
@@ -503,7 +505,9 @@
       sumLine("Video shoots collected", function (t) { return t.shoot; }) +
       sumLine("Card fees covered", function (t) { return t.fee; }) +
       sumLine("Paid to " + ((d.partners[0] || {}).name || "partner"), function (t) { return -t.payout; }, "neg") +
-      "</tbody><tfoot>" + sumLine("Net", function (t) { return t.net; }) + "</tfoot>";
+      "</tbody><tfoot>" + sumLine("Gross", function (t) { return t.net; }, "gross") +
+      sumLine("General expenses", function (t, i) { return -gen[i]; }, "neg gen") +
+      sumLine("Net profit", function (t, i) { return Math.round((t.net - gen[i]) * 100) / 100; }, "netp") + "</tfoot>";
 
     // Ad spend: three lines per client.
     var adBody = adRows.map(function (c) {
@@ -528,7 +532,7 @@
       (view.range === "custom" ? '<div class="al-dates"><label>From <input class="inp" type="month" id="finFrom" value="' + keys[0] + '"></label><label>To <input class="inp" type="month" id="finTo" value="' + keys[keys.length - 1] + '"></label></div>' : "") + "</div>" +
       '<nav class="rep-nav"><a href="#" data-jump="secPnl">Profit &amp; loss</a><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
       pnlSection(y, keys, curKey, lbl) +
-      section("secSum", "Summary", "", summary) +
+      section("secSum", "Summary", "Gross is what client work brings in after ad spend and partner payouts. General expenses are SGS's own Meta ads, Stripe fees and the business expenses in QuickBooks (software, insurance, contractors, accounting...); see Profit &amp; loss for the breakdown.", summary) +
       section("secRev", "Revenue", "Retainers, websites and other one-time work, by the month it was billed.",
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
       section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
@@ -794,6 +798,30 @@
   // left out however a month's charges were categorized there.
   var AD_SPEND_QBO = /meta ad spend|client ad spend|^advertising\s*(&|and)\s*marketing$/i;
   var OWN_ACCTS = ((window.SGS_CONFIG && window.SGS_CONFIG.sgsMeta) || {}).adAccounts || [];
+  // Everything the business spends outside client money, per month: SGS's own Meta ads, Stripe fees and
+  // QuickBooks expenses (minus the ad spend accounts, which come from Meta and Tracker instead). QuickBooks
+  // "Contract labor" that is the 633 Studios shoot payments already in the Summary is taken out once.
+  function generalExpenses(keys, payouts) {
+    var p = d.pnl, hasQbo = !!(p && p.rows && p.rows.length);
+    var cids = Object.keys(d.cell);
+    return keys.map(function (k, i) {
+      var t = (d.ownSpend[k] || 0) + cids.reduce(function (s, cid) { return s + val(cid, k, "stripe_fee"); }, 0);
+      if (hasQbo) {
+        var c = p.months.indexOf(k.slice(0, 7)), labor = 0;
+        if (c >= 0) {
+          p.rows.forEach(function (r) {
+            if (r.kind !== "line" || !r.values || !/^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") || AD_SPEND_QBO.test(r.name)) { return; }
+            var v = Number(r.values[c]) || 0;
+            t += v;
+            if (/contract labor|contractor/i.test(r.name)) { labor += v; }
+          });
+          t -= Math.min(labor, (payouts && payouts[i]) || 0);
+        }
+      }
+      return Math.round(t * 100) / 100;
+    });
+  }
+
   function pnlSection(y, keys, curKey, lbl) {
     var p = d.pnl;
     var hasQbo = !!(p && p.rows && p.rows.length);
@@ -819,6 +847,15 @@
         if (r.kind === "line") { expTotal = add(expTotal, qv(r)); expRows.push({ name: r.name, depth: r.depth, v: qv(r) }); }
         else if (r.kind === "header" && r.depth > 0) { expRows.push({ name: r.name, depth: r.depth, head: true }); }
       });
+    }
+    // 633 Studios payouts recorded in Tracker but not (yet) as Contract labor in QuickBooks, so the
+    // profit here matches the Summary's net profit.
+    var labor = zero.slice();
+    if (hasQbo) { p.rows.forEach(function (r) { if (r.kind === "line" && /^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") && /contract labor|contractor/i.test(r.name)) { labor = add(labor, qv(r)); } }); }
+    var payoutGap = sum("partner_payout").map(function (v, i) { return Math.max(0, Math.round((v - labor[i]) * 100) / 100); });
+    if (payoutGap.some(function (v) { return v; })) {
+      expRows.push({ name: "Paid to " + ((d.partners[0] || {}).name || "partner") + " (not in QuickBooks yet)", depth: 1, v: payoutGap });
+      expTotal = add(expTotal, payoutGap);
     }
     var net = add(gross, neg(expTotal));
     var qboIncome = zero;
