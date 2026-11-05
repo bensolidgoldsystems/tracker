@@ -479,11 +479,11 @@
       }).join("") + "<td class='tot'>" + money(sum, { cents: cents }) + "</td></tr></tfoot>";
     }
     function sumCat(rows, cat) { return function (k) { return rows.reduce(function (s, c) { return s + (cat === "spend" ? spent(c.id, k) : val(c.id, k, cat)); }, 0); }; }
-    function section(id, title, sub, table, addCat) {
+    function section(id, title, sub, table, addCat, tcls) {
       return '<section class="rep-sec" id="' + id + '"><div class="rep-h"><h2>' + esc(title) + "</h2>" +
         (addCat && !ro() ? '<button class="btn sm" data-add="' + addCat + '">+ Add amount</button>' : "") + "</div>" +
         (sub ? '<p class="muted rep-sub">' + sub + "</p>" : "") +
-        '<div class="sheet-wrap"><table class="sheet">' + table + "</table></div></section>";
+        '<div class="sheet-wrap"><table class="sheet' + (tcls ? " " + tcls : "") + '">' + table + "</table></div></section>";
     }
 
     // Summary
@@ -491,23 +491,36 @@
     var gen = generalExpenses(keys, sumKeys.map(function (t) { return t.payout; }));
     function sumLine(label, f, cls) {
       var tot = 0;
-      return "<tr class='" + (cls || "") + "'><th class='sticky'>" + esc(label) + "</th><td class='st'></td>" + sumKeys.map(function (t, i) {
-        var v = f(t, i); tot += v;
-        var cl = (keys[i] === curKey ? "now " : "") + (v < -0.004 && /gross|netp/.test(cls || "") ? "neg" : "");
+      var pad = /pl-l/.test(cls || "") ? 28 : 14;
+      return "<tr class='" + (cls || "") + "'><th class='sticky' style='padding-left:" + pad + "px'>" + esc(label) + "</th><td class='st'></td>" + sumKeys.map(function (t, i) {
+        var v = Math.round(f(t, i) * 100) / 100; tot += v;
+        var cl = (keys[i] === curKey ? "now " : "") + (v < -0.004 ? "neg" : "");
         return "<td" + (cl.trim() ? " class='" + cl.trim() + "'" : "") + ">" + (v ? money(v) : "") + "</td>";
-      }).join("") + "<td class='tot" + (tot < -0.004 && /gross|netp/.test(cls || "") ? " neg" : "") + "'>" + money(tot) + "</td></tr>";
+      }).join("") + "<td class='tot" + (tot < -0.004 ? " neg" : "") + "'>" + money(Math.round(tot * 100) / 100) + "</td></tr>";
     }
+    function sumHead(label) { return "<tr class='pl-h'><th class='sticky' style='padding-left:14px'>" + esc(label) + "</th><td class='st'></td>" + keys.map(function (k) { return "<td" + (k === curKey ? " class='now'" : "") + "></td>"; }).join("") + "<td class='tot'></td></tr>"; }
+    var pName = (d.partners[0] || {}).name || "partner";
+    var inT = function (t) { return t.income + t.reimb + t.shoot + t.fee; };
+    var clientT = function (t) { return t.spend + t.payout; };
     var summary = head("Month") + "<tbody>" +
-      sumLine("Revenue (retainers + one-time)", function (t) { return t.revenue; }) +
-      sumLine("Pay per lead", function (t) { return t.per_lead; }) +
-      sumLine("Ad spend prepaid", function (t) { return t.reimb; }) +
-      sumLine("Ad spend on our cards", function (t) { return -t.spend; }, "neg") +
-      sumLine("Video shoots collected", function (t) { return t.shoot; }) +
-      sumLine("Card fees covered", function (t) { return t.fee; }) +
-      sumLine("Paid to " + ((d.partners[0] || {}).name || "partner"), function (t) { return -t.payout; }, "neg") +
-      "</tbody><tfoot>" + sumLine("Gross", function (t) { return t.net; }, "gross") +
-      sumLine("General expenses", function (t, i) { return -gen[i]; }, "neg gen") +
-      sumLine("Net profit", function (t, i) { return Math.round((t.net - gen[i]) * 100) / 100; }, "netp") + "</tfoot>";
+      sumHead("Money in") +
+      sumLine("Retainers and one-time work", function (t) { return t.revenue; }, "pl-l") +
+      sumLine("Pay per lead", function (t) { return t.per_lead; }, "pl-l") +
+      sumLine("Ad spend prepaid by clients", function (t) { return t.reimb; }, "pl-l") +
+      sumLine("Video shoots collected", function (t) { return t.shoot; }, "pl-l") +
+      sumLine("Card fees clients covered", function (t) { return t.fee; }, "pl-l") +
+      sumLine("Total in", inT, "pl-t") +
+      sumHead("Client costs") +
+      sumLine("Client ad spend (Meta)", function (t) { return t.spend; }, "pl-l") +
+      sumLine("Paid to " + pName, function (t) { return t.payout; }, "pl-l") +
+      sumLine("Total client costs", clientT, "pl-t") +
+      sumLine("Gross profit", function (t) { return t.net; }, "pl-t pl-key") +
+      sumHead("General expenses") +
+      sumLine("SGS's own ads (Meta)", function (t, i) { return gen[i].own; }, "pl-l") +
+      sumLine("Stripe fees", function (t, i) { return gen[i].fees; }, "pl-l") +
+      sumLine("QuickBooks expenses", function (t, i) { return gen[i].books; }, "pl-l") +
+      sumLine("Total general expenses", function (t, i) { return gen[i].total; }, "pl-t") +
+            sumLine("Net profit", function (t, i) { return t.net - gen[i].total; }, "pl-t pl-key netp") + "</tbody>";
 
     // Ad spend: three lines per client.
     var adBody = adRows.map(function (c) {
@@ -532,7 +545,7 @@
       (view.range === "custom" ? '<div class="al-dates"><label>From <input class="inp" type="month" id="finFrom" value="' + keys[0] + '"></label><label>To <input class="inp" type="month" id="finTo" value="' + keys[keys.length - 1] + '"></label></div>' : "") + "</div>" +
       '<nav class="rep-nav"><a href="#" data-jump="secPnl">Profit &amp; loss</a><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
       pnlSection(y, keys, curKey, lbl) +
-      section("secSum", "Summary", "Gross is what client work brings in after ad spend and partner payouts. General expenses are SGS's own Meta ads, Stripe fees and the business expenses in QuickBooks (software, insurance, contractors, accounting...); see Profit &amp; loss for the breakdown.", summary) +
+      section("secSum", "Summary", "Everything that came in, what client work cost (their ad spend and " + esc(pName) + "), and SGS's own expenses. QuickBooks expenses are your business accounts there (software, insurance, accounting...); see Profit &amp; loss for each one.", summary, null, "pl") +
       section("secRev", "Revenue", "Retainers, websites and other one-time work, by the month it was billed.",
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
       section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
@@ -812,24 +825,27 @@
   // Everything the business spends outside client money, per month: SGS's own Meta ads, Stripe fees and
   // QuickBooks expenses (minus the ad spend accounts, which come from Meta and Tracker instead). QuickBooks
   // "Contract labor" that is the 633 Studios shoot payments already in the Summary is taken out once.
+  // SGS's own costs per month, split: own Meta ads, Stripe fees, QuickBooks business expenses
+  // (ad-spend accounts left out; contract labor already counted as the partner payout left out too).
   function generalExpenses(keys, payouts) {
     var p = d.pnl, hasQbo = !!(p && p.rows && p.rows.length);
     var cids = Object.keys(d.cell);
+    var r2 = function (v) { return Math.round(v * 100) / 100; };
     return keys.map(function (k, i) {
-      var t = (d.ownSpend[k] || 0) + cids.reduce(function (s, cid) { return s + val(cid, k, "stripe_fee"); }, 0);
+      var own = d.ownSpend[k] || 0, fees = cids.reduce(function (s, cid) { return s + val(cid, k, "stripe_fee"); }, 0), books = 0;
       if (hasQbo) {
         var c = p.months.indexOf(k.slice(0, 7)), labor = 0;
         if (c >= 0) {
           p.rows.forEach(function (r) {
             if (r.kind !== "line" || !r.values || !/^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") || AD_SPEND_QBO.test(r.name)) { return; }
             var v = Number(r.values[c]) || 0;
-            t += v;
+            books += v;
             if (/contract labor|contractor/i.test(r.name)) { labor += v; }
           });
-          t -= Math.min(labor, (payouts && payouts[i]) || 0);
+          books -= Math.min(labor, (payouts && payouts[i]) || 0);
         }
       }
-      return Math.round(t * 100) / 100;
+      return { own: r2(own), fees: r2(fees), books: r2(books), total: r2(own + fees + books) };
     });
   }
 
