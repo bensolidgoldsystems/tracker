@@ -596,3 +596,10 @@ label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 .viewer-body .pdf-pages canvas{background:#fff;border-radius:4px;max-width:100%;height:auto;box-shadow:0 2px 12px rgba(0,0,0,.4)}
 .viewer-body .pdf-pages p{margin:auto}
 .fthumb img.pdf-thumb{object-fit:contain;background:#fff}
+
+/* Client Details panel (side column): narrow label column, long text full width */
+.ans.det{grid-template-columns:118px minmax(0,1fr)}
+.ans.det dd a{word-break:break-all}
+.ans.det.wide{grid-template-columns:minmax(0,1fr)}
+.ans.det.wide dd{line-height:1.5}
+@media (max-width:720px){.ans.det{grid-template-columns:110px minmax(0,1fr)}.ans.det dt{grid-column:auto}.ans.det.wide dt{grid-column:1/-1}}

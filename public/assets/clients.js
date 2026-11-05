@@ -362,15 +362,16 @@
   }
 
   function detailsPanel(c, p) {
-    function row(label, val) { return '<dl class="ans"><dt>' + esc(label) + "</dt><dd>" + (val || '<span class="muted">—</span>') + "</dd><span></span></dl>"; }
+    // Compact rows for the narrow side column; long text (notes) runs full width under its label.
+    function row(label, val, wide) { return '<dl class="ans det' + (wide ? " wide" : "") + '"><dt>' + esc(label) + "</dt><dd>" + (val || '<span class="muted">—</span>') + "</dd></dl>"; }
     return '<div class="panel"><h2>Details</h2>' +
       row("Billed", p ? "Through " + esc(p.name) + " (partner)" : "Directly") +
       row("Pays by", esc(PAY[c.payment_method] || c.payment_method)) +
-      row("Address", esc(c.address)) +
+      row("Address", esc(c.address), (c.address || "").length > 28) +
       row("Stripe customer" + ((c.stripe_customer_ids || []).length > 1 ? "s" : ""), (c.stripe_customer_ids || []).map(function (id) { return '<a href="https://dashboard.stripe.com/customers/' + esc(id) + '" target="_blank" rel="noopener">' + esc(id) + "</a>"; }).join("<br>")) +
       row("GHL contact", esc(c.ghl_contact_id)) +
       (c.lead_id ? row("Website lead", '<a href="#lead/' + c.lead_id + '">Open intake</a>') : "") +
-      row("Notes", c.notes ? '<span style="white-space:pre-wrap">' + esc(c.notes) + "</span>" : "") +
+      row("Notes", c.notes ? '<span style="white-space:pre-wrap">' + esc(c.notes) + "</span>" : "", true) +
       "</div>";
   }
 
