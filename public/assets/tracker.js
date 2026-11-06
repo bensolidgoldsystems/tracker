@@ -840,7 +840,7 @@
       t.addEventListener("click", open);
       t.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     });
-    $("addInput").addEventListener("change", function (e) { uploadFiles($("addKind").value, e.target.files); e.target.value = ""; });
+    $("addInput").addEventListener("change", function (e) { var files = Array.prototype.slice.call(e.target.files || []); e.target.value = ""; uploadFiles($("addKind").value, files); });
     wireBanner();
   }
 
@@ -896,7 +896,8 @@
   function safeName(n) { return (String(n).normalize("NFKD").replace(/[^\w.\-]+/g, "-").replace(/-+/g, "-").replace(/^[-.]+/, "") || "file").slice(-90); }
 
   async function uploadFiles(kind, list) {
-    if (!list || !list.length) { return; }
+    list = Array.prototype.slice.call(list || []);   // a copy: clearing the file input empties its live list
+    if (!list.length) { return; }
     var id = current.lead.id, rows = [], n = 0;
     for (var i = 0; i < list.length; i++) {
       var file = list[i];
