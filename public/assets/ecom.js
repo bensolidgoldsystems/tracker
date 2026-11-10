@@ -14,7 +14,7 @@
     ["Checkout", [["payments", "Payments (Shopify Payments / PayPal)"], ["shipping", "Shipping rates"], ["taxes", "Taxes"], ["policies", "Refund, privacy, shipping and terms pages"]]],
     ["Launch", [["pages", "Home, About and Contact pages"], ["emails", "Order emails branded"], ["tracking", "Meta pixel and Google Analytics"], ["apps", "Apps (reviews, email signup...)"], ["testorder", "Test order placed and refunded"], ["launched", "Password removed, store live"]]]
   ];
-  var AFTER = [["", "Not decided"], ["handoff", "Hand off the keys"], ["per_change", "Pay per change"], ["monthly", "Monthly plan"]];
+  var AFTER = [["", "Not decided"], ["handoff", "Hand off (30 days of fixes)"], ["per_change", "Pay per change"], ["monthly", "Monthly plan"]];
   var ECOM_SVC = /shopify|ecom|\berp\b/i, MGMT = /shopify store management/i;
   var INCOME = { ecom: "Ecom", revenue: "Other work", card_fee: "Card fee covered", per_lead: "Pay per lead", ad_reimbursement: "Ad spend prepaid", video_shoot: "Video shoot" };
 
@@ -112,7 +112,7 @@
         var lbl = a[0] === "per_change" ? "Pay per change" + (svcByName(/store changes/i) ? " (" + money(svcByName(/store changes/i).default_price) + ")" : "") :
           a[0] === "monthly" ? "Monthly plan" + (svcByName(MGMT) ? " (" + money(svcByName(MGMT).default_price) + "/mo)" : "") : a[1];
         return '<button class="seg-b' + ((st.after_launch || "") === a[0] ? " on" : "") + '" data-after="' + a[0] + '"' + (ro() ? " disabled" : "") + ">" + esc(lbl) + "</button>";
-      }).join("") + "</div></div>" +
+      }).join("") + "</div>" + afterNote(st) + "</div>" +
       '<div class="ec-grid">' +
         '<div class="panel ec-check"><h2>Build checklist</h2><div class="bigbar"><div class="pbar"><i style="width:' + Math.round(done * 100 / items.length) + '%"></i></div><span>' + done + "/" + items.length + "</span></div>" +
           CHECKLIST.map(function (g) {
@@ -155,6 +155,18 @@
       "</div>";
     wireHead();
     wire(c, st);
+  }
+  // Hand off: 30 days of free fixes from launch, then changes are paid per request.
+  function afterNote(st) {
+    var per = svcByName(/store changes/i), price = per ? money(per.default_price) : "$250";
+    if (st.after_launch === "handoff") {
+      if (!st.launch_date) { return '<span class="ec-note">Free fixes for 30 days after launch, then ' + price + " per change.</span>"; }
+      var end = new Date(st.launch_date + "T12:00:00"); end.setDate(end.getDate() + 30);
+      var over = end < new Date();
+      return '<span class="ec-note' + (over ? "" : " on") + '">' + (over ? "Free fixes ended " : "Free fixes until ") + esc(end.toLocaleDateString("en-US", { month: "short", day: "numeric" })) + (over ? "; changes are " + price + " each" : "") + ".</span>";
+    }
+    if (st.after_launch === "per_change") { return '<span class="ec-note">Invoice "Shopify Store Changes" in Stripe for each request; it shows under Payments.</span>'; }
+    return "";
   }
   function dl(k, v, wide) { return v ? '<div class="' + (wide ? "wide" : "") + '"><dt>' + esc(k) + "</dt><dd>" + v + "</dd></div>" : ""; }
 
@@ -258,7 +270,8 @@
   }
 
   function addService(c) {
-    var list = data.services.filter(function (v) { return v.active !== false && ECOM_SVC.test(v.name); });
+    // Per-change work isn't a service on the client: invoice "Shopify Store Changes" in Stripe each time.
+    var list = data.services.filter(function (v) { return v.active !== false && ECOM_SVC.test(v.name) && !/store changes/i.test(v.name); });
     T.modal("<h2>Add a service</h2><p class='muted' style='margin:-8px 0 14px'>" + esc(c.business_name) + "</p>" +
       "<div class='g3 ec-g2'><div class='fld'><label for='svSel'>Service</label><select class='inp' id='svSel'>" + list.map(function (v) {
         return "<option value='" + v.id + "'>" + esc(v.name) + "</option>";
