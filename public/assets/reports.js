@@ -13,7 +13,7 @@
   var T = null;
   var M3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var CAT = {
-    revenue: "Revenue", per_lead: "Pay per lead", ad_spend: "Ad spend (our cards)",
+    revenue: "Revenue", per_lead: "Pay per lead", ecom: "Ecom sites", ad_spend: "Ad spend (our cards)",
     ad_reimbursement: "Ad spend prepaid", partner_payout: "Paid to partner",
     video_shoot: "Video shoot collected", card_fee: "Card fee covered"
   };
@@ -82,10 +82,12 @@
       q(T.sb.from("qbo_pnl").select("*").eq("id", 1)).catch(function () { return []; }),
       q(T.sb.from("meta_leads").select("client_id,created_time").not("voided_at", "is", null)).catch(function () { return []; }),
       // SGS's own Meta ad spend (its own ad accounts), straight from Meta.
-      all(function () { return T.sb.from("meta_daily").select("day,spend").in("ad_account_id", OWN_ACCTS.length ? OWN_ACCTS : ["none"]).gt("spend", 0).order("day"); }).catch(function () { return []; })
+      all(function () { return T.sb.from("meta_daily").select("day,spend").in("ad_account_id", OWN_ACCTS.length ? OWN_ACCTS : ["none"]).gt("spend", 0).order("day"); }).catch(function () { return []; }),
+      q(T.sb.from("ecom_stores").select("client_id")).catch(function () { return []; })
     ]);
     d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null, voided: res[11] };
     d.ownSpend = {};
+    d.ecomIds = {}; res[13].forEach(function (r) { d.ecomIds[r.client_id] = 1; });
     res[12].forEach(function (r) { var k = ym(r.day); d.ownSpend[k] = (d.ownSpend[k] || 0) + Number(r.spend); });
     index();
     applyLive();
@@ -140,15 +142,15 @@
     return b;
   }
   function monthTotals(key) {
-    var t = { revenue: 0, per_lead: 0, spend: 0, reimb: 0, payout: 0, shoot: 0, fee: 0 };
+    var t = { revenue: 0, per_lead: 0, ecom: 0, spend: 0, reimb: 0, payout: 0, shoot: 0, fee: 0 };
     Object.keys(d.cell).forEach(function (cid) {
       var m = d.cell[cid][key]; if (!m) { return; }
-      t.revenue += m.revenue || 0; t.per_lead += m.per_lead || 0;
+      t.revenue += m.revenue || 0; t.per_lead += m.per_lead || 0; t.ecom += m.ecom || 0;
       t.spend += (m.ad_spend || 0) + (m.synced_spend || 0);
       t.reimb += m.ad_reimbursement || 0; t.payout += m.partner_payout || 0;
       t.shoot += m.video_shoot || 0; t.fee += m.card_fee || 0;
     });
-    t.income = t.revenue + t.per_lead;
+    t.income = t.revenue + t.per_lead + t.ecom;
     t.net = t.income + t.reimb + t.shoot + t.fee - t.spend - t.payout;
     return t;
   }
@@ -289,7 +291,7 @@
     if (dayOfMonth > 5) {
       d.clients.forEach(function (c) {
         if (statusOf(c) !== "active" || !monthlyServices(c.id).length) { return; }
-        if (!val(c.id, key, "revenue")) {
+        if (!val(c.id, key, "revenue") && !val(c.id, key, "ecom")) {
           items.push({ pri: 2, html: "No payment recorded for <b>" + esc(c.business_name) + "</b> in " + esc(monthLong(key)) + ' <a href="#finance">Add it</a>' });
         }
       });
@@ -444,6 +446,7 @@
       return hasAnyIn(c.id, ["revenue"], keys) || (statusOf(c) !== "churned" && !perLeadServices(c.id).length && (monthlyServices(c.id).length || statusOf(c) === "onboarding"));
     });
     var pplRows = clients.filter(function (c) { return hasAnyIn(c.id, ["per_lead"], keys) || (statusOf(c) !== "churned" && perLeadServices(c.id).length); });
+    var ecomRows = clients.filter(function (c) { return hasAnyIn(c.id, ["ecom"], keys) || (statusOf(c) !== "churned" && d.ecomIds[c.id]); });
     var adRows = clients.filter(function (c) { return hasAnyIn(c.id, ["ad_spend", "synced_spend", "ad_reimbursement"], keys) || (weFront(c) && statusOf(c) !== "churned"); });
     var payRows = clients.filter(function (c) { return hasAnyIn(c.id, ["partner_payout", "video_shoot"], keys); });
     var feeRows = clients.filter(function (c) { return hasAnyIn(c.id, ["card_fee"], keys); });
@@ -506,6 +509,7 @@
       sumHead("Money in") +
       sumLine("Retainers and one-time work", function (t) { return t.revenue; }, "pl-l") +
       sumLine("Pay per lead", function (t) { return t.per_lead; }, "pl-l") +
+      sumLine("Ecom sites", function (t) { return t.ecom; }, "pl-l") +
       sumLine("Ad spend prepaid by clients", function (t) { return t.reimb; }, "pl-l") +
       sumLine("Video shoots collected", function (t) { return t.shoot; }, "pl-l") +
       sumLine("Card fees clients covered", function (t) { return t.fee; }, "pl-l") +
@@ -543,13 +547,15 @@
         return '<button class="seg-b' + (view.range === r[0] ? " on" : "") + '" data-frange="' + r[0] + '">' + r[1] + "</button>";
       }).join("") + "</div>" +
       (view.range === "custom" ? '<div class="al-dates"><label>From <input class="inp" type="month" id="finFrom" value="' + keys[0] + '"></label><label>To <input class="inp" type="month" id="finTo" value="' + keys[keys.length - 1] + '"></label></div>' : "") + "</div>" +
-      '<nav class="rep-nav"><a href="#" data-jump="secPnl">Profit &amp; loss</a><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
+      '<nav class="rep-nav"><a href="#" data-jump="secPnl">Profit &amp; loss</a><a href="#" data-jump="secSum">Summary</a><a href="#" data-jump="secRev">Revenue</a><a href="#" data-jump="secPpl">Pay per lead</a><a href="#" data-jump="secEcom">Ecom sites</a><a href="#" data-jump="secAds">Ad spend</a><a href="#" data-jump="secPay">Pay ' + esc(partnerName) + "</a></nav>" +
       pnlSection(y, keys, curKey, lbl) +
       section("secSum", "Summary", "Everything that came in, what client work cost (their ad spend and " + esc(pName) + "), and SGS's own expenses. QuickBooks expenses are your business accounts there (software, insurance, accounting...); see Profit &amp; loss for each one.", summary, null, "pl") +
       section("secRev", "Revenue", "Retainers, websites and other one-time work, by the month it was billed.",
         head("Client") + "<tbody>" + revRows.map(function (c) { return row(c, "revenue"); }).join("") + "</tbody>" + totalRow("Total revenue", sumCat(revRows, "revenue")), "revenue") +
       section("secPpl", "Pay per lead", "Amounts billed. Lead counts come from Meta once it's connected.",
         head("Client") + "<tbody>" + pplRows.map(function (c) { return row(c, "per_lead"); }).join("") + "</tbody>" + totalRow("Total pay per lead", sumCat(pplRows, "per_lead")), "per_lead") +
+      section("secEcom", "Ecom sites", "Shopify store builds and store management, by the month it was paid.",
+        head("Client") + "<tbody>" + ecomRows.map(function (c) { return row(c, "ecom"); }).join("") + "</tbody>" + totalRow("Total ecom sites", sumCat(ecomRows, "ecom")), "ecom") +
       section("secAds", "Ad spend and prepayments", "Spent = actual Meta charges on our cards (5978, 0719), from billing reports and synced from Meta every hour. Prepaid = what the client paid us up front for ad spend. Balance = prepaid minus spent so far; below zero means they owe us.",
         head("Client") + adBody + totalRow("Total spent", sumCat(adRows, "spend"), true).replace("<tfoot>", "<tfoot class='multi'>").replace("</tfoot>", "") +
         totalRow("Total prepaid", sumCat(adRows, "ad_reimbursement"), true).replace("<tfoot>", "").replace("</tfoot>", "") + "</tfoot>", "ad_reimbursement") +
@@ -726,16 +732,16 @@
   async function clientPanel(el, c) {
     try { await load(); } catch (e) { el.innerHTML = ""; return; }
     var y = new Date().getFullYear(), curKey = monthKey(y, new Date().getMonth());
-    var tot = { revenue: 0, per_lead: 0, spend: 0, reimb: 0, payout: 0, leads: 0 };
+    var tot = { revenue: 0, per_lead: 0, ecom: 0, spend: 0, reimb: 0, payout: 0, leads: 0 };
     M3.forEach(function (_, i) {
       var k = monthKey(y, i);
-      tot.revenue += val(c.id, k, "revenue"); tot.per_lead += val(c.id, k, "per_lead");
+      tot.revenue += val(c.id, k, "revenue"); tot.per_lead += val(c.id, k, "per_lead"); tot.ecom += val(c.id, k, "ecom");
       tot.spend += spent(c.id, k); tot.reimb += val(c.id, k, "ad_reimbursement");
       tot.payout += val(c.id, k, "partner_payout"); tot.leads += val(c.id, k, "leads");
     });
     var bal = adBalance(c.id, curKey);
     var lines = [
-      ["Revenue " + y, money(tot.revenue + tot.per_lead)],
+      ["Revenue " + y, money(tot.revenue + tot.per_lead + tot.ecom)],
       tot.leads ? ["Leads from Meta " + y, String(tot.leads)] : null,
       tot.spend || weFront(c) ? ["Ad spend on our cards", money(tot.spend, { cents: true })] : null,
       tot.reimb || weFront(c) ? ["Ad spend prepaid", money(tot.reimb, { cents: true })] : null,
@@ -860,8 +866,8 @@
     var col = keys.map(function (k) { return hasQbo ? p.months.indexOf(k.slice(0, 7)) : -1; });
     var qv = function (r) { return col.map(function (i) { return i >= 0 && r.values ? r.values[i] : 0; }); };
 
-    var inc = { revenue: sum("revenue"), ppl: sum("per_lead"), prepaid: sum("ad_reimbursement"), shoot: sum("video_shoot"), cardfee: sum("card_fee") };
-    var income = [inc.revenue, inc.ppl, inc.prepaid, inc.shoot, inc.cardfee].reduce(add, zero);
+    var inc = { revenue: sum("revenue"), ppl: sum("per_lead"), ecom: sum("ecom"), prepaid: sum("ad_reimbursement"), shoot: sum("video_shoot"), cardfee: sum("card_fee") };
+    var income = [inc.revenue, inc.ppl, inc.ecom, inc.prepaid, inc.shoot, inc.cardfee].reduce(add, zero);
     var adSpend = keys.map(function (k) { return cids.reduce(function (s, cid) { return s + spent(cid, k); }, 0); });
     var fees = sum("stripe_fee");
     var gross = add(income, neg(add(adSpend, fees)));
@@ -900,7 +906,7 @@
     var key = function (name, v) { var t = v.reduce(function (a, b) { return a + b; }, 0); return line(name, v, "pl-t pl-key" + (t < 0 ? " neg" : ""), 0); };
 
     var body = head("Income (Tracker)") +
-      line("Retainers and one-time work", inc.revenue) + line("Pay per lead", inc.ppl) + line("Ad spend prepaid by clients", inc.prepaid) +
+      line("Retainers and one-time work", inc.revenue) + line("Pay per lead", inc.ppl) + line("Ecom sites", inc.ecom) + line("Ad spend prepaid by clients", inc.prepaid) +
       line("Video shoots collected", inc.shoot) + line("Card fees clients covered", inc.cardfee) +
       line("Total income", income, "pl-t", 0) +
       head("Cost of delivery (Tracker)") +

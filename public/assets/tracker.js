@@ -128,8 +128,8 @@
   // Per-member access (team_members.tabs / read_only; admins see everything). The database enforces it;
   // this only hides what they can't open.
   var access = { tabs: null, readOnly: false };
-  var TAB_LINKS = { overview: "tabOverview", clients: "tabClients", finance: "tabReports", adleads: "tabAdLeads", sgs: "tabSgs", ppl: "tabPpl", leads: "tabLeads" };
-  var TAB_ORDER = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "leads"];
+  var TAB_LINKS = { overview: "tabOverview", clients: "tabClients", finance: "tabReports", adleads: "tabAdLeads", sgs: "tabSgs", ppl: "tabPpl", ecom: "tabEcom", leads: "tabLeads" };
+  var TAB_ORDER = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "ecom", "leads"];
   function canSee(tab) { return !access.tabs || access.tabs.indexOf(tab) !== -1; }
   function tabFor(h) {
     if (/^#settings/.test(h)) { return "account"; }
@@ -138,6 +138,7 @@
     if (/^#sgs/.test(h)) { return "sgs"; }
     if (/^#adleads/.test(h)) { return "adleads"; }
     if (/^#ppl/.test(h)) { return "ppl"; }
+    if (/^#ecom/.test(h)) { return "ecom"; }
     if (/^#(reports|finance)/.test(h)) { return "finance"; }
     if (/^#(clients|client\/|partner\/)/.test(h)) { return "clients"; }
     return "overview";
@@ -361,13 +362,14 @@
      #clients ... Clients (clients.js)   #client/<id>  #partner/<id>
      #leads ... Website Leads board            #lead/<id>
      #admin  #settings */
-  var VIEWS = ["overviewView", "clientsView", "reportsView", "pplView", "adLeadsView", "sgsView", "boardView", "leadView", "adminView", "settingsView"];
+  var VIEWS = ["overviewView", "clientsView", "reportsView", "pplView", "ecomView", "adLeadsView", "sgsView", "boardView", "leadView", "adminView", "settingsView"];
   function show(id) {
     VIEWS.forEach(function (v) { $(v).classList.toggle("hidden", v !== id); });
     $("tabOverview").classList.toggle("on", id === "overviewView");
     $("tabClients").classList.toggle("on", id === "clientsView");
     $("tabReports").classList.toggle("on", id === "reportsView");
     $("tabPpl").classList.toggle("on", id === "pplView");
+    $("tabEcom").classList.toggle("on", id === "ecomView");
     $("tabAdLeads").classList.toggle("on", id === "adLeadsView");
     $("tabSgs").classList.toggle("on", id === "sgsView");
     $("tabLeads").classList.toggle("on", id === "boardView" || id === "leadView");
@@ -389,6 +391,7 @@
     else if (/^#sgs/.test(h)) { show("sgsView"); window.SGSAdLeads.route(h, $("sgsView")); }
     else if (/^#adleads/.test(h)) { show("adLeadsView"); window.SGSAdLeads.route(h, $("adLeadsView")); }
     else if (/^#ppl/.test(h)) { show("pplView"); window.SGSPpl.route(h, $("pplView")); }
+    else if (/^#ecom/.test(h)) { show("ecomView"); window.SGSEcom.route(h, $("ecomView")); }
     else if (/^#finance\/statements/.test(h)) { show("reportsView"); window.SGSStatements.route(h, $("reportsView")); }
     else if (/^#(reports|finance)/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
     else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }
@@ -576,7 +579,7 @@
     }
   }
 
-  var TAB_NAMES = { overview: "Overview", clients: "Clients", finance: "Finance", adleads: "Client Leads", sgs: "SGS Leads", ppl: "Pay per lead", leads: "Website Leads", settings: "Settings (Meta, QuickBooks, services)" };
+  var TAB_NAMES = { overview: "Overview", clients: "Clients", finance: "Finance", adleads: "Client Leads", sgs: "SGS Leads", ppl: "Pay per lead", ecom: "Ecom sites", leads: "Website Leads", settings: "Settings (Meta, QuickBooks, services)" };
   function accessText(u) {
     if (u.role === "admin") { return "Sees everything"; }
     var t = u.tabs && u.tabs.length ? u.tabs.map(function (k) { return (TAB_NAMES[k] || k).replace(/ \(.*/, ""); }).join(", ") : "All tabs";
@@ -1177,6 +1180,7 @@
   window.SGSClients.init(shared);
   window.SGSReports.init(shared);
   window.SGSPpl.init(shared);
+  window.SGSEcom.init(shared);
   window.SGSAdLeads.init(shared);
   window.SGSStatements.init(shared);
 

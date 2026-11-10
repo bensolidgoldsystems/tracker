@@ -4,8 +4,9 @@
 //   "Ad Spend Pre Payment" / projected spend  -> ad_reimbursement (prepaid ad spend)
 //   "Video ..." / "shoot"                     -> video_shoot ($600 per shoot goes to the videographer)
 //   "N Leads" / "Qualified Lead"              -> per_lead
+//   "Shopify" / "ecom" / "online store"       -> ecom (Shopify store builds and management)
 //   anything else (management, websites)      -> revenue
-// Card payments on prepays and shoots carry a 3% surcharge; the extra is recorded as card_fee.
+// Card payments on prepays, shoots and ecom work carry a 3% surcharge; the extra is recorded as card_fee.
 // Spreadsheet rows for a client and month Stripe has payments for move to money_entries_superseded
 // (cash/Zelle rows stay); rows moved earlier come back if Stripe no longer covers that month.
 // Auth: x-cron-secret (Vault meta_sync_secret) or a signed-in team member.
@@ -16,7 +17,7 @@ const ALLOWED_ORIGINS = ["https://tracker.solidgoldsystems.com", "https://solidg
 const FIRST_DAY = "2026-01-01";
 const SHOOT_PRICE = 600;          // what the videographer is paid per shoot
 const CARD_SURCHARGE = 0.03;
-const STRIPE_CATS = ["revenue", "per_lead", "ad_reimbursement", "video_shoot", "card_fee", "stripe_fee"];
+const STRIPE_CATS = ["revenue", "per_lead", "ecom", "ad_reimbursement", "video_shoot", "card_fee", "stripe_fee"];
 
 const url = Deno.env.get("SUPABASE_URL")!;
 function serviceKey(): string {
@@ -88,6 +89,7 @@ function classify(desc: string): string {
   if (/ad spend|pre ?-?payment|prepay|reimburs|projected spend/i.test(s)) return "ad_reimbursement";
   if (/video|shoot/i.test(s)) return "video_shoot";
   if (/\bleads?\b/i.test(s) && !/lead[\s-]?gen/i.test(s)) return "per_lead";   // "Lead Gen retainer" is revenue
+  if (/shopify|e-?commerce|\becom\b|online store/i.test(s)) return "ecom";
   return "revenue";
 }
 // Base amount + card fee covered. Prepays: a 3% surcharge shows as amount = base * 1.03 with a
@@ -97,7 +99,7 @@ function splitFee(cat: string, amount: number, qty: number): [number, number] {
     const base = Math.min(amount, SHOOT_PRICE * Math.max(1, qty));
     return [cents(base), cents(amount - base)];
   }
-  if (cat === "ad_reimbursement") {
+  if (cat === "ad_reimbursement" || cat === "ecom") {
     const base = amount / (1 + CARD_SURCHARGE);
     if (Math.abs(base - Math.round(base)) < 0.006 && amount - base > 0.5) return [Math.round(base), cents(amount - Math.round(base))];
   }
@@ -254,7 +256,7 @@ async function runSync(dry = false) {
     // Spreadsheet rows for a client and month that Stripe has payments for are replaced by Stripe's
     // (cash/Zelle rows stay). Months Stripe has nothing for keep the spreadsheet amount.
     const SHEET_CATS = ["revenue", "ad_reimbursement", "per_lead"];
-    const INCOME = ["revenue", "ad_reimbursement", "per_lead", "video_shoot", "card_fee"];
+    const INCOME = ["revenue", "ecom", "ad_reimbursement", "per_lead", "video_shoot", "card_fee"];
     const covered = new Set<string>();
     for (const r of rows) if (r.client_id && r.amount > 0 && INCOME.includes(r.category)) covered.add(r.client_id + "|" + String(r.month).slice(0, 7));
     const isCovered = (e: any) => covered.has(e.client_id + "|" + String(e.month).slice(0, 7)) && !/cash|zelle/i.test(e.payment_method || "");

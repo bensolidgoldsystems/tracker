@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
     if (!EMAIL.test(email)) return json(req, 400, { error: "Enter a valid email" });
 
     if (action === "invite") {
-      const TABS = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "leads", "settings"];
+      const TABS = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "ecom", "leads", "settings"];
       const tabs = Array.isArray(body.tabs) ? body.tabs.filter((t: string) => TABS.includes(t)) : null;
       const { error: upErr } = await admin.from("team_members").upsert(
         { email, role, invited_by: myEmail, invited_at: new Date().toISOString(), tabs: tabs && tabs.length ? tabs : null, read_only: !!body.read_only },
@@ -159,7 +159,7 @@ Deno.serve(async (req) => {
 
     // Which tabs a member can open (null = all) and whether they can change anything.
     if (action === "set_access") {
-      const TABS = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "leads", "settings"];
+      const TABS = ["overview", "clients", "finance", "adleads", "sgs", "ppl", "ecom", "leads", "settings"];
       const tabs = Array.isArray(body.tabs) ? body.tabs.filter((t: string) => TABS.includes(t)) : null;
       if (tabs && !tabs.length) return json(req, 400, { error: "Pick at least one tab" });
       const { error } = await admin.from("team_members").update({ tabs, read_only: !!body.read_only }).eq("email", email);

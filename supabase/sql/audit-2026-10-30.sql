@@ -76,3 +76,9 @@ grant update (voided_at, void_reason, voided_by) on public.ghl_contacts to authe
 -- Storage bucket "statements": PDFs only, 50 MB, same rules.
 -- Seeded: Chase checking ··0697, Chase card (Ben) ··5978, Chase card (Alex) ··0719, and starter labels
 -- (software subscriptions, Hiscox insurance, card fee, Zelle to/from 633 Studios / Jake Moscato).
+
+-- 2026-11-10 ecom_stores (applied as migration "ecom_stores"): Ecom sites tab.
+--   ecom_stores(client_id pk -> clients, stage kickoff|building|review|live|paused, platform, store_url, admin_url,
+--   domain, plan, launch_date, notes, checklist jsonb, sales jsonb {"YYYY-MM": {orders, revenue}}).
+--   RLS: read can_see('ecom'); insert/update/delete also can_write(). Services added: Shopify Store Build ($1,500 one-time),
+--   Shopify Store Management (monthly). money_entries.category 'ecom' (stripe-sync: lines mentioning Shopify / ecom / online store).

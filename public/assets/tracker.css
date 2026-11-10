@@ -611,3 +611,27 @@ label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 #finQbo{color:var(--gold);font-size:inherit;padding:0 2px;cursor:pointer}
 #finQbo:disabled{color:var(--muted);cursor:default}
 @media (max-width:700px){.rep .cl-actions{justify-content:flex-start;width:100%}}
+/* Ecom sites tab */
+.ec-stages{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 16px;margin-bottom:16px}
+.ec-lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.ec-stages .seg{flex-wrap:wrap}
+.ec-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}
+.ec-side{display:grid;gap:16px}
+.ec-grid .panel{margin:0}
+.ec-dl{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px;margin:0}
+.ec-dl .wide{grid-column:1/-1}
+.ec-dl dt{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:3px}
+.ec-dl dd{margin:0;font-size:14px;overflow-wrap:anywhere;white-space:pre-wrap}
+.ec-dl a{color:var(--gold)}
+.ec-pay{max-height:340px;overflow:auto}
+.ec-pay-r{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
+.ec-pay-r:first-child{border-top:0}
+.ec-pay-r small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.ec-pay-r .muted{white-space:nowrap;font-size:13px}
+.ec-sales-r{display:grid;grid-template-columns:minmax(0,1.4fr) 1fr 1fr 1fr 70px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums;font-size:14px}
+.ec-sales-r.ec-th{border-top:0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.ec-sales-r span:last-child{text-align:right}
+.ec-g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.stat.ok b{color:var(--ok, #4ade80)}
+@media (max-width:900px){.ec-grid{grid-template-columns:1fr}}
+@media (max-width:560px){.ec-dl{grid-template-columns:1fr}.ec-sales-r{grid-template-columns:minmax(0,1.2fr) .6fr 1fr 60px;gap:8px}.ec-sales-r span:nth-child(4){display:none}.ec-g2{grid-template-columns:1fr}}
