@@ -4,7 +4,7 @@
 //   "Ad Spend Pre Payment" / projected spend  -> ad_reimbursement (prepaid ad spend)
 //   "Video ..." / "shoot"                     -> video_shoot ($600 per shoot goes to the videographer)
 //   "N Leads" / "Qualified Lead"              -> per_lead
-//   "Shopify" / "ecom" / "online store"       -> ecom (Shopify store builds and management)
+//   "Shopify" / "ecom" / "ERP" / notification emails / store changes -> ecom (store builds, add-ons, plans)
 //   anything else (management, websites)      -> revenue
 // Card payments on prepays, shoots and ecom work carry a 3% surcharge; the extra is recorded as card_fee.
 // Spreadsheet rows for a client and month Stripe has payments for move to money_entries_superseded
@@ -89,7 +89,7 @@ function classify(desc: string): string {
   if (/ad spend|pre ?-?payment|prepay|reimburs|projected spend/i.test(s)) return "ad_reimbursement";
   if (/video|shoot/i.test(s)) return "video_shoot";
   if (/\bleads?\b/i.test(s) && !/lead[\s-]?gen/i.test(s)) return "per_lead";   // "Lead Gen retainer" is revenue
-  if (/shopify|e-?commerce|\becom\b|online store/i.test(s)) return "ecom";
+  if (/shopify|e-?commerce|\becom\b|online store|\berp\b|notification emails?|store (changes?|edits?|management)/i.test(s)) return "ecom";
   return "revenue";
 }
 // Base amount + card fee covered. Prepays: a 3% surcharge shows as amount = base * 1.03 with a

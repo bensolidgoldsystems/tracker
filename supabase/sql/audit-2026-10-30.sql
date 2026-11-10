@@ -82,3 +82,6 @@ grant update (voided_at, void_reason, voided_by) on public.ghl_contacts to authe
 --   domain, plan, launch_date, notes, checklist jsonb, sales jsonb {"YYYY-MM": {orders, revenue}}).
 --   RLS: read can_see('ecom'); insert/update/delete also can_write(). Services added: Shopify Store Build ($1,500 one-time),
 --   Shopify Store Management (monthly). money_entries.category 'ecom' (stripe-sync: lines mentioning Shopify / ecom / online store).
+-- 2026-11-10 ecom_after_launch_and_services: ecom_stores.after_launch ('', handoff, per_change, monthly).
+--   Services: Shopify Store Management $250/mo (unlimited changes), Shopify Store Changes $250 per request,
+--   Shopify Notification Emails $250, ERP Build $1,500, ERP Subscription $500/mo.

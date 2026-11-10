@@ -14,6 +14,8 @@
     ["Checkout", [["payments", "Payments (Shopify Payments / PayPal)"], ["shipping", "Shipping rates"], ["taxes", "Taxes"], ["policies", "Refund, privacy, shipping and terms pages"]]],
     ["Launch", [["pages", "Home, About and Contact pages"], ["emails", "Order emails branded"], ["tracking", "Meta pixel and Google Analytics"], ["apps", "Apps (reviews, email signup...)"], ["testorder", "Test order placed and refunded"], ["launched", "Password removed, store live"]]]
   ];
+  var AFTER = [["", "Not decided"], ["handoff", "Hand off the keys"], ["per_change", "Pay per change"], ["monthly", "Monthly plan"]];
+  var ECOM_SVC = /shopify|ecom|\berp\b/i, MGMT = /shopify store management/i;
   var INCOME = { ecom: "Ecom", revenue: "Other work", card_fee: "Card fee covered", per_lead: "Pay per lead", ad_reimbursement: "Ad spend prepaid", video_shoot: "Video shoot" };
 
   function esc(s) { return T.esc(s); }
@@ -35,7 +37,7 @@
       q(T.sb.from("ecom_stores").select("*")),
       q(T.sb.from("clients").select("id,business_name,status,lead_id,website").order("business_name")),
       q(T.sb.from("client_services").select("id,client_id,service_id,billing_type,price,status")),
-      q(T.sb.from("services").select("id,name,default_price,billing_types,default_billing_type"))
+      q(T.sb.from("services").select("id,name,description,active,default_price,billing_types,default_billing_type"))
     ]);
     var stores = {}; res[0].forEach(function (s) { stores[s.client_id] = s; });
     var out = { stores: stores, all: res[1], cs: res[2], services: res[3], entries: [] };
@@ -62,8 +64,10 @@
 
   function svcName(s) { var x = data.services.filter(function (v) { return v.id === s.service_id; })[0]; return x ? x.name : ""; }
   function storeServices(cid) {
-    return data.cs.filter(function (s) { return s.client_id === cid && s.status !== "ended" && /shopify|ecom|store/i.test(svcName(s)); });
+    return data.cs.filter(function (s) { return s.client_id === cid && s.status !== "ended" && ECOM_SVC.test(svcName(s)); });
   }
+  function svcByName(re) { return data.services.filter(function (v) { return re.test(v.name); })[0]; }
+  function today() { var t = new Date(); return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); }
 
   function draw(cid) {
     var head = '<div class="cl-head"><div><h1>Ecom sites</h1><p class="muted">Shopify store clients: build progress, store details, what they\'ve paid us and how their store is doing.</p></div>' +
@@ -96,12 +100,18 @@
       '<div class="stats">' +
         stat("Stage", esc(stageLabel), st.launch_date ? (st.stage === "live" ? "Launched " : "Launch ") + esc(fmtDay(st.launch_date)) : "No launch date yet", st.stage === "live" ? "ok" : "") +
         stat("Build checklist", done + " / " + items.length, Math.round(done * 100 / items.length) + "% done") +
-        stat("Build price", build ? money(build) : "Not set", build ? (monthly ? "+ " + money(monthly) + "/mo management" : "One-time") : '<a href="#client/' + c.id + '">Add the service on the client</a>') +
+        stat("One-time work", build ? money(build) : "None yet", build ? svcs.filter(function (s) { return s.billing_type === "one_time"; }).map(function (s) { return esc(svcName(s)); }).join(", ") : "Add a service below") +
+        stat("Monthly", monthly ? money(monthly) + "/mo" : "$0", monthly ? svcs.filter(function (s) { return s.billing_type === "monthly" && s.status === "active"; }).map(function (s) { return esc(svcName(s)); }).join(", ") : "No monthly plans") +
         stat("Paid us", money(paidAll), paidAll !== paidEcom ? money(paidEcom) + " for the store" : "All time, from Stripe and Tracker") +
-        (build && !monthly ? stat("Balance due", money(due), due ? "Build price minus paid" : "Paid in full", due ? "warn" : "") : "") +
+        (build && !monthly ? stat("Balance due", money(due), due ? "One-time work minus paid" : "Paid in full", due ? "warn" : "") : "") +
       "</div>" +
       '<div class="panel ec-stages"><span class="ec-lbl">Stage</span><div class="seg">' + STAGES.map(function (s) {
         return '<button class="seg-b' + (st.stage === s[0] ? " on" : "") + '" data-stage="' + s[0] + '"' + (ro() ? " disabled" : "") + ">" + s[1] + "</button>";
+      }).join("") + "</div>" +
+      '<span class="ec-lbl">After launch</span><div class="seg">' + AFTER.map(function (a) {
+        var lbl = a[0] === "per_change" ? "Pay per change" + (svcByName(/store changes/i) ? " (" + money(svcByName(/store changes/i).default_price) + ")" : "") :
+          a[0] === "monthly" ? "Monthly plan" + (svcByName(MGMT) ? " (" + money(svcByName(MGMT).default_price) + "/mo)" : "") : a[1];
+        return '<button class="seg-b' + ((st.after_launch || "") === a[0] ? " on" : "") + '" data-after="' + a[0] + '"' + (ro() ? " disabled" : "") + ">" + esc(lbl) + "</button>";
       }).join("") + "</div></div>" +
       '<div class="ec-grid">' +
         '<div class="panel ec-check"><h2>Build checklist</h2><div class="bigbar"><div class="pbar"><i style="width:' + Math.round(done * 100 / items.length) + '%"></i></div><span>' + done + "/" + items.length + "</span></div>" +
@@ -122,6 +132,12 @@
               dl("Client", '<a href="#client/' + c.id + '">Client page</a>' + (c.lead_id ? ' · <a href="#lead/' + c.lead_id + '">Brief and files</a>' : "")) +
               (st.notes ? dl("Notes", T.linkify ? T.linkify(esc(st.notes)) : esc(st.notes), true) : "") +
             "</dl></div>" +
+          '<div class="panel"><div class="rep-h"><h2>Services</h2>' + (ro() ? "" : '<button class="btn sm" id="ecSvc">+ Add</button>') + "</div>" +
+            (svcs.length ? '<div class="ec-pay">' + svcs.map(function (s) {
+              return '<div class="ec-pay-r"><span><b>' + esc(svcName(s)) + "</b><small>" + (s.billing_type === "monthly" ? "Monthly" : "One-time") + (s.start_date ? " · since " + esc(fmtDay(s.start_date)) : "") + "</small></span><span>" +
+                (s.price != null ? money(s.price) + (s.billing_type === "monthly" ? "/mo" : "") : '<span class="muted">No price</span>') + "</span></div>";
+            }).join("") + "</div>" : '<p class="muted">No store services yet.</p>') +
+            '<p class="muted ec-foot">Change prices on the <a href="#client/' + c.id + '">client page</a>. Marketing (Meta ads) goes on the client like any ad client.</p></div>' +
           '<div class="panel"><h2>Payments</h2>' + (data.entries.length ? '<div class="ec-pay">' + data.entries.map(function (e) {
             return '<div class="ec-pay-r"><span><b>' + money(e.amount) + "</b><small>" + esc(INCOME[e.category] || e.category) + (e.note ? " · " + esc(e.note) : "") + "</small></span><span class='muted'>" + esc(fmtDay(e.entry_date) || monthName(String(e.month).slice(0, 7))) + "</span></div>";
           }).join("") + "</div>" : '<p class="muted">Nothing paid yet. Stripe invoices show up here within the hour.</p>') + "</div>" +
@@ -171,6 +187,26 @@
       };
     });
     if ($("ecEdit")) { $("ecEdit").onclick = function () { editStore(c, st); }; }
+    if ($("ecSvc")) { $("ecSvc").onclick = function () { addService(c); }; }
+    el.querySelectorAll("[data-after]").forEach(function (b) {
+      b.onclick = async function () {
+        var v = b.dataset.after; if (v === (st.after_launch || "")) { return; }
+        var mgmt = svcByName(MGMT);
+        var active = data.cs.filter(function (s) { return s.client_id === c.id && mgmt && s.service_id === mgmt.id && s.status === "active"; });
+        try {
+          await save(c.id, { after_launch: v });
+          // The monthly plan is the Store Management service on the client: start it, or end it when they switch.
+          if (v === "monthly" && mgmt && !active.length) {
+            await q(T.sb.from("client_services").insert({ client_id: c.id, service_id: mgmt.id, billing_type: "monthly", price: mgmt.default_price, status: "active", start_date: today() }));
+          }
+          if (v !== "monthly" && active.length && confirm("End their " + mgmt.name + " ($" + Number(active[0].price || 0) + "/mo)?")) {
+            await q(T.sb.from("client_services").update({ status: "ended", end_date: today() }).in("id", active.map(function (s) { return s.id; })));
+          }
+        } catch (e) { T.fail(e); }
+        T.toast("After launch: " + b.textContent);
+        reload();
+      };
+    });
     if ($("ecSale")) { $("ecSale").onclick = function () { editSale(c, st, null); }; }
     el.querySelectorAll("[data-sale]").forEach(function (b) { b.onclick = function () { editSale(c, st, b.dataset.sale); }; });
   }
@@ -218,6 +254,32 @@
       if (!isFinite(v) && !isFinite(o)) { T.toast("Enter orders or sales"); return; }
       var btn = this; if (btn.disabled) { return; } btn.disabled = true;
       if (!(await put(function (s) { s[m] = { orders: isFinite(o) ? o : 0, revenue: isFinite(v) ? Math.round(v * 100) / 100 : 0 }; }))) { btn.disabled = false; } else { T.toast("Saved"); }
+    };
+  }
+
+  function addService(c) {
+    var list = data.services.filter(function (v) { return v.active !== false && ECOM_SVC.test(v.name); });
+    T.modal("<h2>Add a service</h2><p class='muted' style='margin:-8px 0 14px'>" + esc(c.business_name) + "</p>" +
+      "<div class='g3 ec-g2'><div class='fld'><label for='svSel'>Service</label><select class='inp' id='svSel'>" + list.map(function (v) {
+        return "<option value='" + v.id + "'>" + esc(v.name) + "</option>";
+      }).join("") + "</select></div>" + field("svPrice", "Price ($)", "", ' type="number" min="0" step="1" inputmode="decimal"') + "</div>" +
+      "<p class='muted' id='svHint' style='margin-top:10px'></p>" +
+      "<div class='mfoot'><button class='btn' id='mCancel'>Cancel</button><button class='btn gold' id='mSave'>Add</button></div>");
+    function pick() {
+      var v = list.filter(function (x) { return x.id === $("svSel").value; })[0] || {};
+      $("svPrice").value = v.default_price != null ? Number(v.default_price) : "";
+      $("svHint").textContent = (v.description || "") + (v.default_billing_type === "monthly" ? " · billed monthly" : " · one-time");
+    }
+    $("svSel").onchange = pick; pick();
+    $("mCancel").onclick = T.closeModal;
+    $("mSave").onclick = async function () {
+      var btn = this; if (btn.disabled) { return; } btn.disabled = true;
+      var v = list.filter(function (x) { return x.id === $("svSel").value; })[0];
+      var price = parseFloat($("svPrice").value);
+      try {
+        await q(T.sb.from("client_services").insert({ client_id: c.id, service_id: v.id, billing_type: v.default_billing_type || "one_time", price: isFinite(price) ? price : null, status: "active", start_date: today() }));
+      } catch (e) { btn.disabled = false; T.fail(e); return; }
+      T.closeModal(); T.toast(v.name + " added"); reload();
     };
   }
 
