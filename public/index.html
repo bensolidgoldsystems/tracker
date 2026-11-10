@@ -65,25 +65,32 @@
 
 <!-- App -->
 <div id="appView" class="hidden">
-  <header class="top">
+  <header class="mbar">
+    <button class="mbar-menu" id="navToggle" aria-label="Menu" aria-controls="sideNav" aria-expanded="false"><span></span><span></span><span></span></button>
+    <a href="#" class="brand" aria-label="Tracker home"><img src="/assets/logo.png" alt="Solid Gold Systems" width="110" height="36"><span>Tracker</span></a>
+  </header>
+  <aside class="snav" id="sideNav">
     <a href="#" class="brand" aria-label="Tracker home"><img src="/assets/logo.png" alt="Solid Gold Systems" width="110" height="36"><span>Tracker</span></a>
     <nav class="tabs" aria-label="Sections">
       <a href="#overview" id="tabOverview" class="tab">Overview</a>
       <a href="#clients" id="tabClients" class="tab">Clients</a>
       <a href="#finance" id="tabReports" class="tab">Finance</a>
+      <div class="nav-h">Services</div>
+      <a href="#leads" id="tabLeads" class="tab">Website Leads</a>
+      <a href="#ecom" id="tabEcom" class="tab">Ecom sites</a>
+      <a href="#ppl" id="tabPpl" class="tab">Pay per lead</a>
+      <div class="nav-h">Leads</div>
       <a href="#adleads" id="tabAdLeads" class="tab">Client Leads</a>
       <a href="#sgs" id="tabSgs" class="tab">SGS Leads</a>
-      <a href="#ppl" id="tabPpl" class="tab">Pay per lead</a>
-      <a href="#ecom" id="tabEcom" class="tab">Ecom sites</a>
-      <a href="#leads" id="tabLeads" class="tab">Website Leads</a>
     </nav>
-    <div class="top-actions">
-      <a class="btn sm hidden" id="adminLink" href="#admin">Admin</a>
-      <a class="btn sm" id="settingsLink" href="#settings">Settings</a>
-      <button class="btn sm ghost" id="signOut">Sign out</button>
+    <div class="snav-foot">
+      <a class="tab hidden" id="adminLink" href="#admin">Admin</a>
+      <a class="tab" id="settingsLink" href="#settings">Settings</a>
+      <button class="tab" id="signOut">Sign out</button>
     </div>
-  </header>
-
+  </aside>
+  <div class="snav-scrim" id="navScrim"></div>
+  <main class="app-main">
   <section id="overviewView" class="hidden"></section>
   <section id="clientsView" class="hidden"></section>
   <section id="reportsView" class="hidden"></section>
@@ -106,6 +113,7 @@
   <section id="leadView" class="hidden"></section>
   <section id="adminView" class="hidden"></section>
   <section id="settingsView" class="hidden"></section>
+  </main>
 </div>
 
 <div class="toast hidden" id="toast" role="status"></div>

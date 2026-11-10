@@ -145,6 +145,12 @@
   }
   function applyAccess() {
     Object.keys(TAB_LINKS).forEach(function (t) { $(TAB_LINKS[t]).classList.toggle("hidden", !canSee(t)); });
+    // A menu group heading with nothing visible under it is hidden too.
+    document.querySelectorAll(".snav .nav-h").forEach(function (h) {
+      var n = h.nextElementSibling, any = false;
+      while (n && !n.classList.contains("nav-h")) { if (!n.classList.contains("hidden")) { any = true; } n = n.nextElementSibling; }
+      h.classList.toggle("hidden", !any);
+    });
     document.body.classList.toggle("read-only", access.readOnly);
   }
   async function enterApp() {
@@ -373,7 +379,18 @@
     $("tabAdLeads").classList.toggle("on", id === "adLeadsView");
     $("tabSgs").classList.toggle("on", id === "sgsView");
     $("tabLeads").classList.toggle("on", id === "boardView" || id === "leadView");
+    $("settingsLink").classList.toggle("on", id === "settingsView");
+    $("adminLink").classList.toggle("on", id === "adminView");
+    navOpen(false);
   }
+  // Phone menu: the side menu slides in over the page.
+  function navOpen(on) {
+    document.body.classList.toggle("nav-open", on);
+    $("navToggle").setAttribute("aria-expanded", on ? "true" : "false");
+  }
+  $("navToggle").addEventListener("click", function () { navOpen(!document.body.classList.contains("nav-open")); });
+  $("navScrim").addEventListener("click", function () { navOpen(false); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && document.body.classList.contains("nav-open")) { navOpen(false); } });
   function route() {
     var h = location.hash;
     var m = h.match(/^#lead\/([0-9a-f-]{36})/);
