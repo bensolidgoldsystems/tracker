@@ -391,7 +391,7 @@
     return '<div class="fld"><label>Ad billing</label><div class="ads-switch">' +
       '<button class="switch' + (on ? " on" : "") + '" id="billAuto" role="switch" aria-checked="' + on + '" aria-label="Pause ad billing automatically"' + (T.readOnly && T.readOnly() ? " disabled" : "") + "><i></i></button>" +
       "<span><b>" + (on ? "Auto-pause on" : "Auto-pause off") + "</b><small" + (last ? ' title="' + esc(last.reason) + '"' : "") + ">" +
-      (on ? (lastTxt || "Stripe ad subscriptions pause after 3 days off") : "Billing won't change with the ads") + "</small></span></div></div>";
+      (on ? (lastTxt || "Stripe ad billing waits while ads aren\u2019t live") : "Billing won't change with the ads") + "</small></span></div></div>";
   }
   async function loadContacts(c) {
     try {

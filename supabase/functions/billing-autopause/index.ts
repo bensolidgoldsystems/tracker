@@ -3,7 +3,9 @@
 // customer linked to the client (their own and the partner's, e.g. "Client - 633 Studios"):
 //   ads off 3+ days (latest ads event is paused/stopped 3+ days ago and no campaign is delivering)
 //     -> pause collection on their ad spend prepayment and ad management subscriptions (invoices voided while paused)
-//     -> a scheduled (not started) ad subscription can't be paused: a warning is logged for a person to decide
+//   ads never went live (no ads events yet, nothing delivering) -> paused right away
+//   a scheduled (not started) ad subscription can't be paused, so while ads aren't live and it would start
+//     within a day, its start (and its phases) move back a day; it starts once the ads are live
 //   ads live again (a campaign is delivering, or the latest event is launched/relaunched)
 //     -> resume the subscriptions THIS function paused (metadata sgs_autopaused); a pause made by hand
 //        in Stripe is never resumed here.
@@ -63,6 +65,29 @@ function nyToday(): string {
 }
 function daysBetween(a: string, b: string) { return Math.round((new Date(b + "T12:00:00Z").getTime() - new Date(a + "T12:00:00Z").getTime()) / 864e5); }
 
+// Move a not-started schedule (and every phase) back so it starts a day from now. Stripe needs the
+// phases sent in full, so each phase's items and settings are copied as they are.
+async function holdSchedule(sc: any) {
+  const now = Math.floor(Date.now() / 1000), start = sc.phases[0].start_date;
+  const shift = Math.max(0, now + 86400 - start);
+  if (!shift) return;
+  const p: Record<string, string> = { "metadata[sgs_held]": "1" };
+  sc.phases.forEach((ph: any, i: number) => {
+    const k = "phases[" + i + "]";
+    if (i === 0) p[k + "[start_date]"] = String(start + shift);
+    if (ph.end_date) p[k + "[end_date]"] = String(ph.end_date + shift);
+    (ph.items || []).forEach((it: any, j: number) => {
+      p[k + "[items][" + j + "][price]"] = typeof it.price === "string" ? it.price : it.price.id;
+      p[k + "[items][" + j + "][quantity]"] = String(it.quantity || 1);
+    });
+    if (ph.collection_method) p[k + "[collection_method]"] = ph.collection_method;
+    if (ph.invoice_settings && ph.invoice_settings.days_until_due) p[k + "[invoice_settings][days_until_due]"] = String(ph.invoice_settings.days_until_due);
+    if (ph.proration_behavior) p[k + "[proration_behavior]"] = ph.proration_behavior;
+    if (ph.default_payment_method) p[k + "[default_payment_method]"] = typeof ph.default_payment_method === "string" ? ph.default_payment_method : ph.default_payment_method.id;
+  });
+  await stripe("POST", "/subscription_schedules/" + sc.id, p);
+}
+
 // The same problem is logged once until someone clicks Done on it (the job runs every hour).
 async function logError(client_id: string, subscription_id: string, reason: string, amount: number | null) {
   const { data: had } = await db.from("billing_events").select("id").eq("client_id", client_id).eq("action", "error").eq("reason", reason).is("seen_at", null).limit(1);
@@ -107,28 +132,28 @@ async function run(dry: boolean) {
     if (!cus.length || !acc.length) continue;
     const ev = latest[c.id];
     const live = acc.some((a: string) => delivering[a] === true) || (ev && ON.includes(ev.kind));
-    const offFor = ev && OFF.includes(ev.kind) ? daysBetween(ev.event_date, today) : -1;
+    const offFor = !ev ? 9999 : OFF.includes(ev.kind) ? daysBetween(ev.event_date, today) : -1;
     const off = !live && offFor >= OFF_DAYS;
-    if (!live && !off) continue;
+    const notLive = !live;
     for (const cu of cus) {
       let subs: any[] = [];
       try { subs = (await stripe("GET", "/subscriptions", { customer: cu, status: "active", limit: "20" })).data || []; }
       catch (e) { actions.push({ client_id: c.id, client: c.business_name, subscription_id: "", action: "error", reason: String((e as Error).message || e).slice(0, 300) }); continue; }
-      // Scheduled subscriptions that haven't started can't be paused: warn when one starts within 30 days.
-      if (off) {
-        try {
-          const sch = (await stripe("GET", "/subscription_schedules", { customer: cu, scheduled: "true", limit: "10" })).data || [];
-          for (const sc of sch) {
-            const ph = (sc.phases || [])[0];
-            if (!ph || sc.status !== "not_started" || ph.start_date * 1000 > Date.now() + 30 * 864e5) continue;
-            let ad = false, amount = 0;
-            for (const it of ph.items || []) { const pr = await priceOf(typeof it.price === "string" ? it.price : it.price.id); if (await isAd(pr)) { ad = true; amount += (pr.unit_amount || 0) * (it.quantity || 1) / 100; } }
-            if (!ad) continue;
-            const start = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(new Date(ph.start_date * 1000));
-            actions.push({ client_id: c.id, client: c.business_name, subscription_id: sc.id, action: "warning", amount,
-              reason: "Ads are off, but a $" + amount + " ad subscription is scheduled to start " + start + ". Scheduled subscriptions can't be paused: push back or cancel it in Stripe if the ads won't be back by then." });
-          }
-        } catch (_) { /* schedules are a nice-to-have */ }
+      // Scheduled ad subscriptions wait for the ads: while they aren't live, a schedule about to start
+      // (within a day) is pushed back a day. When the ads go live it simply starts on its (new) date.
+      if (notLive) {
+        let sch: any[] = [];
+        try { sch = (await stripe("GET", "/subscription_schedules", { customer: cu, scheduled: "true", limit: "10" })).data || []; }
+        catch (e) { actions.push({ client_id: c.id, client: c.business_name, subscription_id: "", action: "error", reason: "Couldn't read scheduled subscriptions: " + String((e as Error).message || e).slice(0, 250) }); }
+        for (const sc of sch) {
+          const ph = (sc.phases || [])[0];
+          if (!ph || sc.status !== "not_started" || ph.start_date * 1000 > Date.now() + 26 * 3600e3) continue;
+          let ad = false, amount = 0;
+          for (const it of ph.items || []) { const pr = await priceOf(typeof it.price === "string" ? it.price : it.price.id); if (await isAd(pr)) { ad = true; amount += (pr.unit_amount || 0) * (it.quantity || 1) / 100; } }
+          if (!ad) continue;
+          actions.push({ client_id: c.id, client: c.business_name, subscription_id: sc.id, action: "held", amount, schedule: sc,
+            reason: "Ads aren't live yet, so its start moved back a day (it starts once the ads are live)" });
+        }
       }
       for (const s of subs) {
         const items = (s.items && s.items.data) || [];
@@ -138,14 +163,14 @@ async function run(dry: boolean) {
         const amount = items.reduce((t: number, it: any) => t + ((it.price && it.price.unit_amount) || 0) * (it.quantity || 1), 0) / 100;
         const mine = !!(s.metadata && s.metadata.sgs_autopaused);
         if (off && !s.pause_collection) {
-          actions.push({ client_id: c.id, client: c.business_name, subscription_id: s.id, action: "paused", amount, reason: "Ads off " + offFor + " days (since " + ev.event_date + ")" });
+          actions.push({ client_id: c.id, client: c.business_name, subscription_id: s.id, action: "paused", amount, reason: ev ? "Ads off " + offFor + " days (since " + ev.event_date + ")" : "Ads haven't gone live yet" });
         } else if (live && s.pause_collection && mine) {
           actions.push({ client_id: c.id, client: c.business_name, subscription_id: s.id, action: "resumed", amount, reason: "Ads are live again" });
         }
       }
     }
   }
-  if (dry) return { ok: true, dry: true, actions };
+  if (dry) return { ok: true, dry: true, actions: actions.map(({ schedule: _s, ...a }) => a) };
 
   let done = 0;
   for (const a of actions) {
@@ -154,6 +179,17 @@ async function run(dry: boolean) {
       // Once per schedule.
       const { data: had } = await db.from("billing_events").select("id").eq("subscription_id", a.subscription_id).eq("action", "warning").limit(1);
       if (!had || !had.length) await db.from("billing_events").insert({ client_id: a.client_id, subscription_id: a.subscription_id, action: "warning", reason: a.reason, amount: a.amount });
+      continue;
+    }
+    if (a.action === "held") {
+      try {
+        await holdSchedule(a.schedule);
+        // Logged once per schedule (it moves a day at a time until the ads are live).
+        const { data: had } = await db.from("billing_events").select("id").eq("subscription_id", a.subscription_id).eq("action", "warning").limit(1);
+        if (!had || !had.length) await db.from("billing_events").insert({ client_id: a.client_id, subscription_id: a.subscription_id, action: "warning", amount: a.amount,
+          reason: "A $" + a.amount + " ad subscription was about to start, but the ads aren't live. Holding it: it starts once the ads are live." });
+        done++;
+      } catch (e) { await logError(a.client_id, a.subscription_id, "Couldn't hold the scheduled subscription: " + String((e as Error).message || e).slice(0, 300), a.amount); }
       continue;
     }
     try {
@@ -168,7 +204,7 @@ async function run(dry: boolean) {
       await logError(a.client_id, a.subscription_id, (a.action === "paused" ? "Couldn't pause: " : "Couldn't resume: ") + String((e as Error).message || e).slice(0, 300), a.amount);
     }
   }
-  return { ok: true, changed: done, actions };
+  return { ok: true, changed: done, actions: actions.map(({ schedule: _s, ...a }) => a) };
 }
 
 Deno.serve(async (req) => {
