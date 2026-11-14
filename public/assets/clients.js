@@ -118,8 +118,10 @@
       q(T.sb.from("partners").select("*").order("name")),
       all(function () { return T.sb.from("client_services").select("*").order("created_at").order("id"); }),
       all(function () { return T.sb.from("ad_events").select("*").order("event_date", { ascending: false }).order("id"); }),
-      q(T.sb.from("meta_ad_accounts").select("ad_account_id,delivering,delivering_at")).catch(function () { return []; })
+      q(T.sb.from("meta_ad_accounts").select("ad_account_id,delivering,delivering_at")).catch(function () { return []; }),
+      q(T.sb.from("billing_events").select("client_id,action,reason,amount,created_at").in("action", ["paused", "resumed", "warning", "error"]).order("created_at", { ascending: false }).limit(300)).catch(function () { return []; })
     ]);
+    data.billing = res[6];
     data.clients = res[0]; data.services = res[1]; data.partners = res[2]; data.cs = res[3]; data.events = res[4]; data.accounts = res[5];
     memo = {}; loadedAt = Date.now();
   }
@@ -306,6 +308,7 @@
           "</small></span></div></div>" +
         (bc ? '<div class="fld"><label>Billing cycle</label><div class="metaval">Cycle ' + bc.cycle + " · day " + bc.day + " of " + window.SGSAds.CYCLE_DAYS +
           '<small class="blk">' + (bc.live ? "Next charge " + esc(dateLong(bc.nextCharge)) : "Paused with ads · " + bc.daysLeft + " live day" + (bc.daysLeft === 1 ? "" : "s") + " left when they restart") + "</small></div></div>" : "") +
+        billingField(c) +
       "</div>" +
 
       '<div class="layout"><div>' +
@@ -380,6 +383,16 @@
   }
 
   var contacts = [];
+  // Automatic pause of the client's Stripe ad subscriptions (ad spend + ad management) while ads are off.
+  function billingField(c) {
+    if (!(c.meta_ad_account_ids || []).length) { return ""; }
+    var on = c.billing_autopause !== false, last = (data.billing || []).filter(function (b) { return b.client_id === c.id; })[0];
+    var lastTxt = last ? (last.action === "paused" ? "Paused " : last.action === "resumed" ? "Resumed " : last.action === "warning" ? "Heads up " : "Problem ") + esc(dateLong(String(last.created_at).slice(0, 10))) : "";
+    return '<div class="fld"><label>Ad billing</label><div class="ads-switch">' +
+      '<button class="switch' + (on ? " on" : "") + '" id="billAuto" role="switch" aria-checked="' + on + '" aria-label="Pause ad billing automatically"' + (T.readOnly && T.readOnly() ? " disabled" : "") + "><i></i></button>" +
+      "<span><b>" + (on ? "Auto-pause on" : "Auto-pause off") + "</b><small" + (last ? ' title="' + esc(last.reason) + '"' : "") + ">" +
+      (on ? (lastTxt || "Stripe ad subscriptions pause after 3 days off") : "Billing won't change with the ads") + "</small></span></div></div>";
+  }
   async function loadContacts(c) {
     try {
       var rows = await q(T.sb.from("client_contacts").select("*").eq("client_id", c.id).order("is_primary", { ascending: false }).order("created_at"));
@@ -410,6 +423,14 @@
     el.querySelectorAll("[data-cs]").forEach(function (b) { b.onclick = function () { editService(c, byId(data.cs, b.dataset.cs)); }; });
     $("editAds").onclick = function () { editAds(c); };
     $("adsToggle").onclick = function () { toggleAds(c); };
+    if ($("billAuto")) {
+      $("billAuto").onclick = async function () {
+        var on = c.billing_autopause === false, btn = this; btn.disabled = true;
+        try { await q(T.sb.from("clients").update({ billing_autopause: on }).eq("id", c.id)); c.billing_autopause = on; T.toast(on ? "Ad billing will pause and resume with the ads" : "Ad billing won't change with the ads"); }
+        catch (e) { T.fail(e); }
+        btn.disabled = false; renderClient(c.id);
+      };
+    }
     $("addEvent").onclick = function () { addEvent(c); };
     el.querySelectorAll("[data-delev]").forEach(function (b) {
       b.onclick = async function () {

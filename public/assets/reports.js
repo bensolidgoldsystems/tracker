@@ -83,10 +83,12 @@
       q(T.sb.from("meta_leads").select("client_id,created_time").not("voided_at", "is", null)).catch(function () { return []; }),
       // SGS's own Meta ad spend (its own ad accounts), straight from Meta.
       all(function () { return T.sb.from("meta_daily").select("day,spend").in("ad_account_id", OWN_ACCTS.length ? OWN_ACCTS : ["none"]).gt("spend", 0).order("day"); }).catch(function () { return []; }),
-      q(T.sb.from("ecom_stores").select("client_id")).catch(function () { return []; })
+      q(T.sb.from("ecom_stores").select("client_id")).catch(function () { return []; }),
+      q(T.sb.from("billing_events").select("*").is("seen_at", null).gte("created_at", new Date(Date.now() - 30 * 864e5).toISOString()).order("created_at", { ascending: false })).catch(function () { return []; })
     ]);
     d = { clients: res[0], partners: res[1], cs: res[2], services: res[3], events: res[4], entries: res[5], daily: res[6], accounts: res[7], runs: res[8], stripeRun: res[9][0] || null, pnl: res[10][0] || null, voided: res[11] };
     d.ownSpend = {};
+    d.billing = res[14] || [];
     d.ecomIds = {}; res[13].forEach(function (r) { d.ecomIds[r.client_id] = 1; });
     res[12].forEach(function (r) { var k = ym(r.day); d.ownSpend[k] = (d.ownSpend[k] || 0) + Number(r.spend); });
     index();
@@ -342,12 +344,27 @@
       var mo = monthlyServices(c.id).concat(d.cs.filter(function (x) { return x.client_id === c.id && x.billing_type === "monthly" && x.status === "paused"; }));
       var price = mo.reduce(function (a, x) { return a + Number(x.price || 0); }, 0);
       var ppl = perLeadServices(c.id).length;
+      var auto = c.billing_autopause !== false && (c.stripe_customer_ids || []).length;
       var what = e.kind === "paused"
-        ? "Ads paused for " + name + " on " + esc(dateShort(e.event_date)) + ". " + (price ? "Pause their billing (" + money(price) + "/mo)." : ppl ? "No new leads to bill while paused." : "Pause billing if they have any.")
+        ? "Ads paused for " + name + " on " + esc(dateShort(e.event_date)) + ". " + (auto ? "Ad billing in Stripe pauses on its own if they're still off on " + esc(dateShort(addDaysStr(e.event_date, 3))) + "." :
+          price ? "Pause their billing (" + money(price) + "/mo)." : ppl ? "No new leads to bill while paused." : "Pause billing if they have any.")
         : "Ads went live for " + name + " on " + esc(dateShort(e.event_date)) + (e.kind === "relaunched" ? " (back on)" : "") + ". " +
-          (price ? (e.kind === "relaunched" ? "Restart their billing" : "Start their subscription") + " (" + money(price) + "/mo)." : ppl ? "Lead billing is on." : "Start charging them.");
+          (e.kind === "relaunched" && auto ? "Ad billing Tracker paused resumes on its own." :
+          price ? (e.kind === "relaunched" ? "Restart their billing" : "Start their subscription") + " (" + money(price) + "/mo)." : ppl ? "Lead billing is on." : "Start charging them.");
       items.push({ pri: 0, cls: e.kind === "paused" ? "ad-off" : "ad-on", html: what +
         ' <button class="btn sm done-btn" data-seen="' + e.id + '">Done</button>' });
+    });
+    // What the automatic ad-billing pause did in Stripe (billing-autopause), until Done.
+    (d.billing || []).forEach(function (b) {
+      var c = byId(d.clients, b.client_id); if (!c) { return; }
+      var name = '<a href="#client/' + c.id + '"><b>' + esc(c.business_name) + "</b></a>";
+      var amt = b.amount ? " (" + money(b.amount) + ")" : "";
+      var what = b.action === "paused" ? "Paused ad billing in Stripe for " + name + amt + ": " + esc(b.reason) + "."
+        : b.action === "resumed" ? "Resumed ad billing in Stripe for " + name + amt + ": ads are live again."
+        : b.action === "warning" ? name + ": " + esc(b.reason)
+        : "Couldn't change ad billing for " + name + ": " + esc(b.reason);
+      items.push({ pri: b.action === "error" || b.action === "warning" ? 0 : 1, cls: b.action === "resumed" ? "ad-on" : "ad-off", html: what +
+        ' <button class="btn sm done-btn" data-bseen="' + b.id + '">Done</button>' });
     });
     d.clients.forEach(function (c) {
       if (statusOf(c) === "churned") { return; }
@@ -367,7 +384,19 @@
       }
     });
   }
+  function addDaysStr(s, n) { var x = new Date(s + "T12:00:00"); x.setDate(x.getDate() + n); return x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0"); }
   function wireReminders(el) {
+    el.querySelectorAll("[data-bseen]").forEach(function (btn) {
+      btn.onclick = async function () {
+        btn.disabled = true;
+        try {
+          await q(T.sb.from("billing_events").update({ seen_at: new Date().toISOString() }).eq("id", btn.dataset.bseen));
+          d.billing = (d.billing || []).filter(function (b) { return String(b.id) !== btn.dataset.bseen; });
+          var li = btn.closest("li"); if (li) { li.remove(); }
+          var ul = $("ovTodo"); if (ul && !ul.children.length) { ul.innerHTML = '<li class="ok">All caught up.</li>'; }
+        } catch (err) { btn.disabled = false; T.fail(err); }
+      };
+    });
     el.querySelectorAll("[data-seen]").forEach(function (btn) {
       btn.onclick = async function () {
         btn.disabled = true;

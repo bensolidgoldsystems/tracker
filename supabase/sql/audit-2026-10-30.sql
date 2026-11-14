@@ -85,3 +85,6 @@ grant update (voided_at, void_reason, voided_by) on public.ghl_contacts to authe
 -- 2026-11-10 ecom_after_launch_and_services: ecom_stores.after_launch ('', handoff, per_change, monthly).
 --   Services: Shopify Store Management $250/mo (unlimited changes), Shopify Store Changes $250 per request,
 --   Shopify Notification Emails $250, ERP Build $1,500, ERP Subscription $500/mo.
+-- 2026-11-14 billing_autopause (+ billing_events_warning): clients.billing_autopause (default on); billing_events
+--   (paused|resumed|warning|error, seen_at). Read: is_team(); update seen_at: can_write(). Rows written by the
+--   billing-autopause edge function only (needs secret STRIPE_BILLING_KEY: Subscriptions write, Products read, Prices read).
