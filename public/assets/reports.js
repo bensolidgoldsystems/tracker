@@ -456,6 +456,32 @@
     var months = d.cell[cid] || {};
     return keys.some(function (k) { return months[k] && cats.some(function (cat) { return months[k][cat]; }); });
   }
+  // Open/close the rows under an expandable line (P&L charges, budget vendors).
+  function wireDet(el) {
+    el.querySelectorAll("tr.has-det").forEach(function (tr) {
+      function toggle() {
+        var open = tr.getAttribute("aria-expanded") !== "true";
+        tr.setAttribute("aria-expanded", open ? "true" : "false");
+        el.querySelectorAll("tr[data-of='" + tr.dataset.det + "']").forEach(function (r) { r.classList.toggle("hidden", !open); });
+      }
+      tr.onclick = toggle;
+      tr.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+    });
+  }
+
+  // Finance > Budgets (#finance/budgets): our own expenses, the last 12 months, and what to keep in the bank.
+  async function budgets(el) {
+    el.innerHTML = '<p class="muted" style="padding:24px">Loading...</p>';
+    try { await load(); } catch (e) { T.fail(e); el.innerHTML = '<p class="muted" style="padding:24px">' + esc(e.message) + "</p>"; return; }
+    var now = new Date(), keys = [];
+    for (var i = 11; i >= 0; i--) { var x = new Date(now.getFullYear(), now.getMonth() - i, 1); keys.push(monthKey(x.getFullYear(), x.getMonth())); }
+    var curKey = monthKey(now.getFullYear(), now.getMonth());
+    el.innerHTML = '<div class="cl-wrap rep"><a class="back" href="#finance">← Finance</a><div class="cl-head"><div><h1>Budgets</h1>' +
+      '<p class="muted">What SGS spends each month, the last 12 months, and what to keep in the bank for next month.</p></div></div>' +
+      bottomSection(keys, curKey, colLabel(keys)) + "</div>";
+    wireDet(el);
+  }
+
   async function reports(el, hash) {
     var m = String(hash || "").match(/^#(?:reports|finance)\/(\d{4})/);
     if (m) { view.range = "custom"; view.from = m[1] + "-01"; view.to = m[1] + "-12"; }
@@ -627,6 +653,7 @@
       var i = $(id);
       if (i) { i.onchange = function () { if (i.value) { view[id === "finFrom" ? "from" : "to"] = i.value; drawReports(el); liveBalances(); } }; }
     });
+    wireDet(el);
     el.querySelectorAll("[data-jump]").forEach(function (a) {
       a.onclick = function (e) { e.preventDefault(); var s = $(a.dataset.jump); if (s) { s.scrollIntoView({ behavior: "smooth", block: "start" }); } };
     });
@@ -884,6 +911,96 @@
     });
   }
 
+  /* ---------- Our bottom line: SGS's own monthly expenses, ongoing vs one-time, and what to keep in the bank ----------
+     Same total as the Summary's "General expenses" (our Meta ads, Stripe fees, QuickBooks business expenses;
+     client ad spend and 633 payouts are paid for by clients, so they're not here).
+     Ongoing = our ads + software & subscriptions + Stripe fees + other bills from vendors that charge us in
+     2+ different months (insurance, bank fees...). Everything else is one-time & other. */
+  var SOFTWARE = /software|subscription/i, LABOR = /contract labor|contractor/i;
+  function vendorKey(x) { return String(x[2] || x[3] || x[1] || "").toLowerCase().replace(/[0-9#*]+/g, "").replace(/\s+/g, " ").trim().slice(0, 40); }
+  function expenseBreakdown(keys) {
+    var p = d.pnl, cids = Object.keys(d.cell), det = (p && p.details) || {};
+    var payouts = keys.map(function (k) { return cids.reduce(function (s, cid) { return s + val(cid, k, "partner_payout"); }, 0); });
+    var gen = generalExpenses(keys, payouts);
+    var expAccts = {};
+    ((p && p.rows) || []).forEach(function (r) {
+      if (r.kind === "line" && /^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") && !AD_SPEND_QBO.test(r.name)) { expAccts[String(r.name).split(":").pop().trim()] = r; }
+    });
+    // Vendors that bill us in 2+ different months (across everything QuickBooks has) count as recurring.
+    var months = {};
+    Object.keys(expAccts).forEach(function (a) {
+      if (SOFTWARE.test(a) || LABOR.test(a)) { return; }
+      (det[a] || []).forEach(function (x) { var v = vendorKey(x); (months[v] = months[v] || {})[x[0].slice(0, 7)] = 1; });
+    });
+    var recurring = function (x) { return Object.keys(months[vendorKey(x)] || {}).length >= 2; };
+    var col = function (k) { return p && p.months ? p.months.indexOf(k) : -1; };
+    var soft = keys.map(function (k) {
+      var i = col(k); return i < 0 ? 0 : Object.keys(expAccts).filter(function (a) { return SOFTWARE.test(a); }).reduce(function (s, a) { return s + (Number((expAccts[a].values || [])[i]) || 0); }, 0);
+    });
+    var vend = { soft: {}, rec: {}, one: {} };   // vendor -> per-month amounts, for the drop-downs
+    var recur = keys.map(function () { return 0; });
+    Object.keys(expAccts).forEach(function (a) {
+      if (LABOR.test(a)) { return; }
+      (det[a] || []).forEach(function (x) {
+        var j = keys.indexOf(x[0].slice(0, 7)); if (j < 0) { return; }
+        var bucket = SOFTWARE.test(a) ? "soft" : recurring(x) ? "rec" : "one", name = x[2] || x[3] || a;
+        if (bucket === "rec") { recur[j] += Number(x[4]); }
+        var vv = vend[bucket][name] = vend[bucket][name] || keys.map(function () { return 0; });
+        vv[j] += Number(x[4]);
+      });
+    });
+    var r2 = function (v) { return Math.round(v * 100) / 100; };
+    var own = gen.map(function (g) { return g.own; }), fees = gen.map(function (g) { return g.fees; }), total = gen.map(function (g) { return g.total; });
+    soft = soft.map(r2); recur = recur.map(r2);
+    var ongoing = keys.map(function (_, i) { return r2(own[i] + fees[i] + soft[i] + recur[i]); });
+    var one = keys.map(function (_, i) { return r2(Math.max(0, total[i] - ongoing[i])); });
+    return { own: own, fees: fees, soft: soft, recur: recur, ongoing: ongoing, one: one, total: total, vend: vend };
+  }
+  function bottomSection(keys, curKey, lbl) {
+    var b = expenseBreakdown(keys), hasQbo = !!(d.pnl && d.pnl.rows && d.pnl.rows.length);
+    var n = 0;
+    function cells(v, cents) { return v.map(function (x, j) { return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (x ? money(x, { cents: cents }) : "") + "</td>"; }).join(""); }
+    function tot(v) { return Math.round(v.reduce(function (a, c) { return a + c; }, 0) * 100) / 100; }
+    function line(name, v, cls, depth, vendors) {
+      var t = tot(v), id = "", sub = "";
+      var names = vendors ? Object.keys(vendors).filter(function (k) { return vendors[k].some(Boolean); }).sort(function (a, c) { return tot(vendors[c]) - tot(vendors[a]); }) : [];
+      if (names.length) {
+        id = "bd" + (++n);
+        sub = names.map(function (k) {
+          return "<tr class='pl-det hidden' data-of='" + id + "'><th class='sticky' style='padding-left:" + (14 + ((depth || 1) + 1) * 14) + "px' title='" + esc(k) + "'>" + esc(k) + "</th><td class='st'></td>" + cells(vendors[k].map(function (x) { return Math.round(x * 100) / 100; }), true) + "<td class='tot'>" + money(tot(vendors[k]), { cents: true }) + "</td></tr>";
+        }).join("");
+      }
+      return "<tr class='" + (cls || "pl-l") + (id ? " has-det" : "") + "'" + (id ? " data-det='" + id + "' tabindex='0' aria-expanded='false'" : "") + "><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + (id ? "<span class='det-tog' aria-hidden='true'></span>" : "") + esc(name) + "</th><td class='st'></td>" +
+        cells(v) + "<td class='tot'>" + (t ? money(t) : "") + "</td></tr>" + sub;
+    }
+    function head(name) { return "<tr class='pl-h'><th class='sticky' style='padding-left:14px'>" + esc(name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>"; }
+    var body = head("Ongoing") +
+      line("Advertising (our Meta ads)", b.own) +
+      line("Software & subscriptions", b.soft, null, 1, b.vend.soft) +
+      line("Other recurring bills", b.recur, null, 1, b.vend.rec) +
+      line("Stripe fees", b.fees) +
+      line("Total ongoing", b.ongoing, "pl-t", 0) +
+      line("One-time & other", b.one, "pl-l", 0, b.vend.one) +
+      line("Total expenses", b.total, "pl-t", 0);
+    var thead = "<colgroup><col class='c-name'><col class='c-st'>" + keys.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
+      "<thead><tr><th class='sticky'>Our expenses</th><th class='st'></th>" + keys.map(function (k) { return "<th" + (k === curKey ? " class='now'" : "") + ">" + lbl(k) + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+
+    // Projection: average of the last 3 full months (whatever range is on screen).
+    var now = new Date(), last3 = [3, 2, 1].map(function (m) { var x = new Date(now.getFullYear(), now.getMonth() - m, 1); return monthKey(x.getFullYear(), x.getMonth()); });
+    var p3 = expenseBreakdown(last3), avg = function (v) { return v.reduce(function (a, c) { return a + c; }, 0) / v.length; };
+    var aOn = avg(p3.ongoing), aOne = avg(p3.one), need = Math.ceil((aOn + aOne) / 100) * 100;
+    var span = lbl(last3[0]) + "–" + lbl(last3[2]);
+    var proj = '<div class="bl-proj">' +
+      '<div class="bl-big"><span>Keep in the bank for next month</span><b>' + money(need) + "</b><small>About what we spent per month, " + esc(span) + "</small></div>" +
+      '<div><span>Ongoing per month</span><b>' + money(Math.round(aOn)) + "</b><small>Ads " + money(Math.round(avg(p3.own))) + " · software " + money(Math.round(avg(p3.soft))) + " · other bills " + money(Math.round(avg(p3.recur))) + " · Stripe fees " + money(Math.round(avg(p3.fees))) + "</small></div>" +
+      '<div><span>One-time & other per month</span><b>' + money(Math.round(aOne)) + "</b><small>Average of irregular charges</small></div>" +
+      "</div>";
+    var sub = "SGS's own expenses by month (the Summary's general expenses). Client ad spend and " + esc((d.partners[0] || {}).name || "partner") + " payouts aren't here: clients pay for those. Ongoing bills are vendors that charge us in two or more months. Open a line to see each vendor." +
+      (hasQbo ? "" : ' Connect QuickBooks in <a href="#settings">Settings</a> to include business expenses.');
+    return '<section class="rep-sec" id="secBottom"><div class="rep-h"><h2>Our bottom line</h2></div><p class="muted rep-sub">' + sub + "</p>" + proj +
+      '<div class="sheet-wrap"><table class="sheet pl">' + thead + "<tbody>" + body + "</tbody></table></div></section>";
+  }
+
   function pnlSection(y, keys, curKey, lbl) {
     var p = d.pnl;
     var hasQbo = !!(p && p.rows && p.rows.length);
@@ -906,7 +1023,7 @@
     if (hasQbo) {
       p.rows.forEach(function (r) {
         if (!/^(COGS|Expenses|OtherExpenses)$/.test(r.group || "") || AD_SPEND_QBO.test(r.name)) { return; }
-        if (r.kind === "line") { expTotal = add(expTotal, qv(r)); expRows.push({ name: r.name, depth: r.depth, v: qv(r) }); }
+        if (r.kind === "line") { expTotal = add(expTotal, qv(r)); expRows.push({ name: r.name, depth: r.depth, v: qv(r), det: qboCharges(r.name) }); }
         else if (r.kind === "header" && r.depth > 0) { expRows.push({ name: r.name, depth: r.depth, head: true }); }
       });
     }
@@ -921,13 +1038,48 @@
     }
     var net = add(gross, neg(expTotal));
     var qboIncome = zero;
+    // Charges behind a QuickBooks expense line (General Ledger), in the months shown.
+    function qboCharges(name) {
+      var list = (p && p.details && p.details[String(name).split(":").pop().trim()]) || [];
+      return list.filter(function (x) { return keys.indexOf(x[0].slice(0, 7)) >= 0; }).map(function (x) {
+        var who = [x[2], x[3]].filter(Boolean).join(" · ") || x[1] || "Charge";
+        return { label: dateShort(x[0]) + " · " + who, title: [x[1], x[2], x[3]].filter(Boolean).join(" · "), key: x[0].slice(0, 7), v: Number(x[4]) };
+      });
+    }
+    // Tracker lines broken down by client (client ad spend, Stripe fees).
+    function byClient(fn) {
+      return d.clients.map(function (c) {
+        var v = keys.map(function (k) { return Math.round(fn(c.id, k) * 100) / 100; });
+        return v.some(Boolean) ? { label: c.business_name, vals: v } : null;
+      }).filter(Boolean).sort(function (a, b) { return b.vals.reduce(function (x, y) { return x + y; }, 0) - a.vals.reduce(function (x, y) { return x + y; }, 0); });
+    }
+    function stripeFeeCharges() {
+      return d.entries.filter(function (e) { return e.category === "stripe_fee" && keys.indexOf(ym(e.month)) >= 0; }).map(function (e) {
+        var c = byId(d.clients, e.client_id);
+        return { label: (e.entry_date ? dateShort(e.entry_date) + " · " : "") + (c ? c.business_name : "No client") + (e.note ? " · " + String(e.note).replace(/^Stripe fee:?\s*/i, "") : ""), key: ym(e.month), v: Number(e.amount) };
+      }).sort(function (a, b) { return a.label < b.label ? -1 : 1; });
+    }
+    var detN = 0;
+    // Rows under an expandable line: either single charges (amount in its month) or per-client rows.
+    function detRows(det, depth) {
+      if (!det || !det.length) { return ""; }
+      var id = "pd" + (++detN);
+      return { id: id, html: det.map(function (x) {
+        var vals = x.vals || keys.map(function (k) { return k === x.key ? x.v : 0; });
+        var tot = vals.reduce(function (a, b) { return a + b; }, 0);
+        return "<tr class='pl-det hidden' data-of='" + id + "'><th class='sticky' style='padding-left:" + (14 + ((depth || 1) + 1) * 14) + "px' title='" + esc(x.title || x.label) + "'>" + esc(x.label) + "</th><td class='st'></td>" +
+          vals.map(function (v, j) { return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (v ? money(v, { cents: true }) : "") + "</td>"; }).join("") +
+          "<td class='tot'>" + (tot ? money(Math.round(tot * 100) / 100, { cents: true }) : "") + "</td></tr>";
+      }).join("") };
+    }
     if (hasQbo) { p.rows.forEach(function (r) { if (r.kind === "total" && /^total income$/i.test(r.name)) { qboIncome = qv(r); } }); }
 
-    function line(name, v, cls, depth) {
-      var tot = 0;
+    function line(name, v, cls, depth, det) {
+      var tot = 0, dr = det ? detRows(det, depth) : "";
       // Each amount below zero shows red (gross and net profit rows color by sign, month by month).
       var tds = v.map(function (x, j) { tot += x; var c = (keys[j] === curKey ? "now" : "") + (x < 0 ? " neg" : ""); return "<td" + (c.trim() ? " class='" + c.trim() + "'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join("");
-      return "<tr class='" + (cls || "pl-l") + "'><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + tds + "<td class='tot" + (tot < 0 ? " neg" : "") + "'>" + (tot ? money(tot) : "") + "</td></tr>";
+      return "<tr class='" + (cls || "pl-l") + (dr ? " has-det" : "") + "'" + (dr ? " data-det='" + dr.id + "' tabindex='0' aria-expanded='false'" : "") + "><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" +
+        (dr ? "<span class='det-tog' aria-hidden='true'></span>" : "") + esc(name) + "</th><td class='st'></td>" + tds + "<td class='tot" + (tot < 0 ? " neg" : "") + "'>" + (tot ? money(tot) : "") + "</td></tr>" + (dr ? dr.html : "");
     }
     function head(name, depth) {
       return "<tr class='pl-h'><th class='sticky' style='padding-left:" + (14 + (depth || 0) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>";
@@ -939,11 +1091,11 @@
       line("Video shoots collected", inc.shoot) + line("Card fees clients covered", inc.cardfee) +
       line("Total income", income, "pl-t", 0) +
       head("Cost of delivery (Tracker)") +
-      line("Client ad spend (Meta)", adSpend) + line("Stripe fees", fees) +
+      line("Client ad spend (Meta)", adSpend, null, null, byClient(spent)) + line("Stripe fees", fees, null, null, stripeFeeCharges()) +
       line("Total cost of delivery", add(adSpend, fees), "pl-t", 0) +
       key("Gross profit", gross) +
       head("Expenses") +
-      (expRows.length ? expRows.map(function (r) { return r.head ? head(r.name, r.depth) : line(r.name, r.v, "pl-l", r.depth); }).join("") : "") +
+      (expRows.length ? expRows.map(function (r) { return r.head ? head(r.name, r.depth) : line(r.name, r.v, "pl-l", r.depth, r.det); }).join("") : "") +
       line("Total expenses", expTotal, "pl-t", 0) +
       key("Net profit", net) +
       (hasQbo ? line("For reference: QuickBooks total income", qboIncome, "pl-ref", 0) : "");
@@ -980,7 +1132,7 @@
       var sections = Array.prototype.map.call(box.querySelectorAll("section.rep-sec"), function (sec) {
         var sub = sec.querySelector(".rep-sub");
         var rows = [];
-        sec.querySelectorAll("tbody tr, tfoot tr").forEach(function (tr) {
+        sec.querySelectorAll("tbody tr:not(.pl-det), tfoot tr").forEach(function (tr) {
           var th = tr.querySelector("th"), cls = tr.className || "", foot = !!tr.closest("tfoot");
           var label = th ? th.textContent.trim() : "";
           var st = tr.querySelector("td.st"), wide = tr.querySelector("td[colspan]");
@@ -1048,6 +1200,6 @@
     init: function (helpers) { T = helpers; },
     invalidate: function () { loadedAt = 0; },
     data: async function () { await load(); return d; },
-    overview: overview, reports: reports, metaSettings: metaSettings, clientPanel: clientPanel, qboSettings: qboSettings
+    overview: overview, reports: reports, budgets: budgets, metaSettings: metaSettings, clientPanel: clientPanel, qboSettings: qboSettings
   };
 })();

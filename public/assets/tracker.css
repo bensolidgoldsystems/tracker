@@ -682,3 +682,32 @@ label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 .pay-sheet{min-width:1040px}
 .pay-sheet .sticky small{font-weight:400}
 .cl-paid{margin-top:18px}.pay-sheet{min-width:980px}
+
+/* Finance sheets: month headers (and totals rows) stay in view while scrolling */
+.sheet-wrap{max-height:calc(100vh - 110px);overflow:auto}
+.sheet thead th{position:sticky;top:0;z-index:3}
+.sheet thead th.sticky{left:0;z-index:5}
+.sheet tfoot th,.sheet tfoot td{position:sticky;bottom:0;z-index:3;background:var(--card)}
+.sheet tfoot th.sticky{left:0;z-index:5}
+@media (max-width:900px){.sheet-wrap{max-height:calc(100vh - var(--mbar) - 90px)}}
+
+/* P&L: lines that open to show the charges behind them */
+.sheet tr.has-det{cursor:pointer}
+.sheet tr.has-det:hover th,.sheet tr.has-det:hover td{background-color:rgba(245,216,90,.04)}
+.sheet tr.has-det:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
+.det-tog{display:inline-block;width:14px;margin-left:-16px;color:var(--faint);font-size:11px}
+.det-tog::before{content:"\25B8"}
+tr.has-det[aria-expanded="true"] .det-tog::before{content:"\25BE";color:var(--gold)}
+.sheet tr.pl-det th,.sheet tr.pl-det td{font-size:12px;color:var(--muted);font-weight:400;padding-top:5px;padding-bottom:5px;background:rgba(255,255,255,.015)}
+.sheet tr.pl-det th{font-weight:400}
+.sheet tr.pl-det.hidden{display:none}
+/* Our bottom line: projection cards */
+.bl-proj{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin:4px 0 14px}
+.bl-proj>div{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--panel)}
+.bl-proj span{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.bl-proj b{display:block;font-size:26px;margin:6px 0 4px;font-variant-numeric:tabular-nums}
+.bl-proj small{display:block;color:var(--muted);font-size:12px;line-height:1.4}
+.bl-proj .bl-big{border-color:var(--gold-line,rgba(245,216,90,.4));background:rgba(245,216,90,.06)}
+.bl-proj .bl-big b{color:var(--gold);font-size:32px}
+@media (max-width:760px){.bl-proj{grid-template-columns:1fr}}
+.snav .tab.tab-sub{padding-left:28px;font-size:13px}

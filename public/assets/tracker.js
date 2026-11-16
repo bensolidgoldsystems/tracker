@@ -145,6 +145,7 @@
   }
   function applyAccess() {
     Object.keys(TAB_LINKS).forEach(function (t) { $(TAB_LINKS[t]).classList.toggle("hidden", !canSee(t)); });
+    $("tabBudgets").classList.toggle("hidden", !canSee("finance"));
     // A menu group heading with nothing visible under it is hidden too.
     document.querySelectorAll(".snav .nav-h").forEach(function (h) {
       var n = h.nextElementSibling, any = false;
@@ -373,7 +374,9 @@
     VIEWS.forEach(function (v) { $(v).classList.toggle("hidden", v !== id); });
     $("tabOverview").classList.toggle("on", id === "overviewView");
     $("tabClients").classList.toggle("on", id === "clientsView");
-    $("tabReports").classList.toggle("on", id === "reportsView");
+    var bud = /^#finance\/budgets/.test(location.hash);
+    $("tabReports").classList.toggle("on", id === "reportsView" && !bud);
+    $("tabBudgets").classList.toggle("on", id === "reportsView" && bud);
     $("tabPpl").classList.toggle("on", id === "pplView");
     $("tabEcom").classList.toggle("on", id === "ecomView");
     $("tabAdLeads").classList.toggle("on", id === "adLeadsView");
@@ -409,6 +412,7 @@
     else if (/^#adleads/.test(h)) { show("adLeadsView"); window.SGSAdLeads.route(h, $("adLeadsView")); }
     else if (/^#ppl/.test(h)) { show("pplView"); window.SGSPpl.route(h, $("pplView")); }
     else if (/^#ecom/.test(h)) { show("ecomView"); window.SGSEcom.route(h, $("ecomView")); }
+    else if (/^#finance\/budgets/.test(h)) { show("reportsView"); window.SGSReports.budgets($("reportsView")); }
     else if (/^#finance\/statements/.test(h)) { show("reportsView"); window.SGSStatements.route(h, $("reportsView")); }
     else if (/^#(reports|finance)/.test(h)) { show("reportsView"); window.SGSReports.reports($("reportsView"), h); }
     else if (/^#(clients|client\/|partner\/)/.test(h)) { show("clientsView"); window.SGSClients.route(h, $("clientsView")); }

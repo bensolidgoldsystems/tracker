@@ -2,6 +2,7 @@
 //   POST {action:"start"}   signed-in team member -> Intuit sign-in URL to connect QuickBooks
 //   GET  ?code&state&realmId Intuit sends the person back here -> tokens saved -> back to Tracker
 //   POST {action:"sync"}    cron (x-cron-secret) or team -> Profit & Loss by month -> public.qbo_pnl
+//                           (+ the General Ledger lines behind each expense account -> qbo_pnl.details)
 //   POST {action:"status"}  team -> connected company + last sync
 //   POST {action:"disconnect"} team -> forget the tokens
 // Secrets: QBO_CLIENT_ID, QBO_CLIENT_SECRET (Intuit app "SGS Tracker", Accounting scope).
@@ -109,6 +110,38 @@ function flatten(report: any) {
   return { months, rows };
 }
 
+// General Ledger -> { account name: [[date, type, name, memo, amount], ...] } for the given accounts.
+// Sections are accounts (sub-accounts nest); data rows are the individual transactions.
+function ledger(report: any, wanted: Set<string>) {
+  const cols = (report.Columns && report.Columns.Column) || [];
+  const at: Record<string, number> = {};
+  cols.forEach((c: any, i: number) => {
+    const k = ((c.MetaData || []).find((m: any) => m.Name === "ColKey") || {}).Value || "";
+    at[k] = i;
+  });
+  const amtCol = at.subt_nat_amount ?? at.amount ?? at.subt_nat_amount_nt ?? -1;
+  const num = (v: unknown) => { const n = parseFloat(String(v || "").replace(/,/g, "")); return isFinite(n) ? Math.round(n * 100) / 100 : 0; };
+  const out: Record<string, any[]> = {};
+  const short = (n: string) => String(n || "").split(":").pop()!.trim();
+  const walk = (list: any[], acct: string) => {
+    for (const r of list || []) {
+      if (r.type === "Section" || r.Rows) {
+        const h = r.Header && r.Header.ColData;
+        const name = h ? short(h[0].value) : acct;
+        if (r.Rows && r.Rows.Row) walk(r.Rows.Row, name);
+      } else if (r.ColData && acct && wanted.has(acct)) {
+        const cd = r.ColData, g = (k: string) => (at[k] !== undefined && cd[at[k]] ? String(cd[at[k]].value || "") : "");
+        const amount = amtCol >= 0 ? num(cd[amtCol] && cd[amtCol].value) : 0;
+        const date = g("tx_date");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !amount) continue;
+        (out[acct] = out[acct] || []).push([date, g("txn_type"), g("name"), g("memo").slice(0, 140), amount]);
+      }
+    }
+  };
+  walk((report.Rows && report.Rows.Row) || [], "");
+  return out;
+}
+
 async function sync() {
   try {
     const c = await accessToken();
@@ -116,12 +149,23 @@ async function sync() {
     const today = new Date().toISOString().slice(0, 10);
     const rep = await qbo(c, "/reports/ProfitAndLoss?start_date=" + (year - 1) + "-01-01&end_date=" + today + "&summarize_column_by=Month&minorversion=75");
     const { months, rows } = flatten(rep);
+    // The charges behind each expense line (shown when a P&L line is opened in Tracker). Optional:
+    // if the ledger can't be read, the P&L still updates.
+    let details: Record<string, any[]> | null = null;
+    try {
+      const wanted = new Set(rows.filter((r) => r.kind === "line" && /^(COGS|Expenses|OtherExpenses)$/.test(r.group || "")).map((r) => String(r.name).split(":").pop()!.trim()));
+      const gl = await qbo(c, "/reports/GeneralLedger?start_date=" + (year - 1) + "-01-01&end_date=" + today +
+        "&columns=tx_date,txn_type,name,memo,subt_nat_amount&sort_by=tx_date&minorversion=75");
+      details = ledger(gl, wanted);
+    } catch (e) { console.error("qbo ledger failed:", (e as Error).message); }
     let company = c.company_name;
     if (!company) {
       try { const info = await qbo(c, "/companyinfo/" + c.realm_id + "?minorversion=75"); company = (info.CompanyInfo && info.CompanyInfo.CompanyName) || ""; await db.from("qbo_connection").update({ company_name: company }).eq("id", 1); } catch (_) { /* optional */ }
     }
-    await db.from("qbo_pnl").upsert({ id: 1, company_name: company, months, rows, fetched_at: new Date().toISOString(), ok: true, message: "" });
-    return { ok: true, months: months.length, rows: rows.length };
+    const save: any = { id: 1, company_name: company, months, rows, fetched_at: new Date().toISOString(), ok: true, message: "" };
+    if (details) save.details = details;
+    await db.from("qbo_pnl").upsert(save);
+    return { ok: true, months: months.length, rows: rows.length, ledger_accounts: details ? Object.keys(details).length : null };
   } catch (e) {
     const message = String((e as Error).message || e).slice(0, 500);
     console.error("qbo sync failed:", message);
