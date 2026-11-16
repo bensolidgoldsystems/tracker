@@ -714,3 +714,4 @@ tr.has-det[aria-expanded="true"] .det-tog::before{content:"\25BE";color:var(--go
 .fld small.muted{display:block;margin-top:4px;font-size:12px}
 @media (max-width:1100px){.bl-proj.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.bl-proj.four{grid-template-columns:1fr}}
+.bl-proj span .linkbtn{font-size:11px;letter-spacing:0;text-transform:none;color:var(--gold);margin-left:6px;cursor:pointer}

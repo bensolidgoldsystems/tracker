@@ -483,14 +483,19 @@
     wireDet(el);
     var btn = el.querySelector("#budPct");
     if (btn) { btn.onclick = function () { editBudget(set || {}, function () { budgets(el); }); }; }
+    var lb = el.querySelector("#budLine");
+    if (lb) { lb.onclick = function () { editBudget(set || {}, function () { budgets(el); }, true); }; }
   }
 
-  function editBudget(set, done) {
+  function editBudget(set, done, focusLine) {
     function f(id, label, v, hint) {
       return "<div class='fld'><label for='" + id + "'>" + label + "</label><div class='pct-in'><input class='inp' id='" + id + "' type='number' min='0' max='100' step='1' inputmode='decimal' value='" + esc(String(v == null ? "" : Number(v))) + "'><span>%</span></div>" +
         (hint ? "<small class='muted'>" + hint + "</small>" : "") + "</div>";
     }
-    T.modal("<h2>Budget percentages</h2><p class='muted' style='margin:-6px 0 14px'>How money over the bottom line is split. These three should add up to 100%.</p>" +
+    T.modal("<h2>Budget</h2>" +
+      "<div class='fld'><label for='bpLine'>Our bottom line ($ per month)</label><input class='inp' id='bpLine' type='number' min='0' step='50' inputmode='decimal' placeholder='Leave empty to use actual ongoing expenses' value='" + (set.bottom_line != null ? esc(String(Number(set.bottom_line))) : "") + "'>" +
+      "<small class='muted'>What we need to cover each month before anything is split</small></div>" +
+      "<p class='muted' style='margin:14px 0 10px'>How money over the bottom line is split. These three should add up to 100%.</p>" +
       "<div class='g3'>" + f("bpSav", "Savings", set.savings_pct, "Taxes and the unexpected; one-offs come out of this") + f("bpMkt", "Marketing", set.marketing_pct, "Extra marketing spend") + f("bpInc", "Income", set.income_pct, "Paying ourselves") + "</div>" +
       "<div class='g3' style='margin-top:12px'>" + f("bpTax", "Taxes, of income", set.income_tax_pct, "Set aside from the income share") + "</div>" +
       "<p id='bpSum' class='muted' style='margin-top:10px'></p>" +
@@ -501,16 +506,19 @@
       return t;
     }
     ["bpSav", "bpMkt", "bpInc"].forEach(function (id) { $(id).oninput = sum; }); sum();
+    if (focusLine) { setTimeout(function () { $("bpLine").focus(); }, 50); }
     $("mCancel").onclick = T.closeModal;
     $("mSave").onclick = async function () {
       var vals = ["bpSav", "bpMkt", "bpInc", "bpTax"].map(function (id) { return parseFloat($(id).value); });
       if (vals.some(function (v) { return !isFinite(v) || v < 0 || v > 100; })) { T.toast("Use numbers from 0 to 100"); return; }
       if (sum() !== 100 && !confirm("Savings, marketing and income add up to " + sum() + "%, not 100%. Save anyway?")) { return; }
+      var lineV = $("bpLine").value.trim(), line = lineV === "" ? null : parseFloat(lineV);
+      if (line != null && (!isFinite(line) || line < 0)) { T.toast("Enter the bottom line in dollars, or leave it empty"); return; }
       var b = this; b.disabled = true;
       try {
-        await q(T.sb.from("budget_settings").update({ savings_pct: vals[0], marketing_pct: vals[1], income_pct: vals[2], income_tax_pct: vals[3], updated_at: new Date().toISOString(), updated_by: T.userEmail ? T.userEmail() : "" }).eq("id", 1));
+        await q(T.sb.from("budget_settings").update({ bottom_line: line, savings_pct: vals[0], marketing_pct: vals[1], income_pct: vals[2], income_tax_pct: vals[3], updated_at: new Date().toISOString(), updated_by: T.userEmail ? T.userEmail() : "" }).eq("id", 1));
       } catch (e) { b.disabled = false; T.fail(e); return; }
-      T.closeModal(); T.toast("Budget percentages saved"); done();
+      T.closeModal(); T.toast("Budget saved"); done();
     };
   }
 
@@ -1065,20 +1073,24 @@
     // Over the bottom line = gross profit (after client ad spend and partner payouts) minus ongoing expenses,
     // split into savings / marketing / income by the percentages in budget_settings.
     var pct = function (v) { return Number(v) / 100; };
+    // Our bottom line: the amount entered on this page, else each month's actual ongoing expenses.
+    var fixed = set.bottom_line != null && set.bottom_line !== "" ? Number(set.bottom_line) : null;
     function split(bk, ks) {
       var gross = ks.map(function (k) { return Math.round(monthTotals(k).net * 100) / 100; });
-      var over = ks.map(function (_, i) { return Math.round((gross[i] - bk.ongoing[i]) * 100) / 100; });
+      var line = ks.map(function (_, i) { return fixed != null ? fixed : bk.ongoing[i]; });
+      var over = ks.map(function (_, i) { return Math.round((gross[i] - line[i]) * 100) / 100; });
       var base = over.map(function (v) { return Math.max(0, v); });
       var r2 = function (v) { return Math.round(v * 100) / 100; };
       var sav = base.map(function (v) { return r2(v * pct(set.savings_pct)); }), mkt = base.map(function (v) { return r2(v * pct(set.marketing_pct)); });
       var inc = base.map(function (v) { return r2(v * pct(set.income_pct)); }), tax = inc.map(function (v) { return r2(v * pct(set.income_tax_pct)); });
-      return { gross: gross, ongoing: bk.ongoing, over: over, sav: sav, mkt: mkt, inc: inc, tax: tax, take: inc.map(function (v, i) { return r2(v - tax[i]); }),
+      return { gross: gross, ongoing: bk.ongoing, line: line, over: over, sav: sav, mkt: mkt, inc: inc, tax: tax, take: inc.map(function (v, i) { return r2(v - tax[i]); }),
         one: bk.one, left: sav.map(function (v, i) { return r2(v - bk.one[i]); }) };
     }
     var sp = split(b, keys), s3 = split(p3, last3);
     var proj = '<div class="bl-proj four">' +
-      '<div class="bl-big"><span>Keep in the bank for next month</span><b>' + money(need) + "</b><small>About what we spent per month, " + esc(span) + "</small></div>" +
-      '<div><span>Over the bottom line per month</span><b' + (avg(s3.over) < 0 ? ' class="neg"' : "") + ">" + money(Math.round(avg(s3.over))) + "</b><small>Gross profit " + money(Math.round(avg(s3.gross))) + " minus ongoing " + money(Math.round(aOn)) + "</small></div>" +
+      '<div><span>Recommended bottom line</span><b>' + money(need) + "</b><small>What we spent per month, " + esc(span) + " (ongoing " + money(Math.round(aOn)) + " + one-offs " + money(Math.round(aOne)) + ")</small></div>" +
+      '<div class="bl-big"><span>Our bottom line ' + (ro() ? "" : '<button class="linkbtn" id="budLine">' + (fixed != null ? "Edit" : "Set it") + "</button>") + "</span><b>" + (fixed != null ? money(fixed) : "Not set") + "</b><small>" +
+        (fixed != null ? "" : "Using actual ongoing expenses until it's set. ") + "Over it: " + money(Math.round(avg(s3.over))) + "/mo on average</small></div>" +
       '<div><span>One-off budget per month</span><b>' + money(Math.round(avg(s3.sav))) + "</b><small>The " + esc(String(Number(set.savings_pct))) + "% savings share. One-offs have run " + money(Math.round(aOne)) + "/mo</small></div>" +
       '<div><span>Take-home pay per month</span><b>' + money(Math.round(avg(s3.take))) + "</b><small>Income " + money(Math.round(avg(s3.inc))) + " minus " + esc(String(Number(set.income_tax_pct))) + "% for taxes</small></div>" +
       "</div>";
@@ -1091,7 +1103,7 @@
     var P = function (v) { return Number(v) + "%"; };
     var splitBody = head("Over the bottom line") +
       srow("Gross profit", sp.gross) +
-      srow("Ongoing expenses", sp.ongoing) +
+      (fixed != null ? srow("Our bottom line", sp.line) : srow("Ongoing expenses", sp.ongoing)) +
       srow("Over the bottom line", sp.over, "pl-t", 0) +
       head("Split") +
       srow("Savings (" + P(set.savings_pct) + ")", sp.sav) +
@@ -1103,8 +1115,8 @@
       srow("One-time & other spent", sp.one) +
       srow("Savings left after one-offs", sp.left, "pl-t", 0);
     var total100 = Number(set.savings_pct) + Number(set.marketing_pct) + Number(set.income_pct);
-    var splitSec = '<section class="rep-sec" id="secSplit"><div class="rep-h"><h2>Budget split</h2>' + (ro() ? "" : '<button class="btn sm" id="budPct">Change percentages</button>') + "</div>" +
-      '<p class="muted rep-sub">Money over the bottom line (gross profit minus ongoing expenses) split ' + P(set.savings_pct) + " savings, " + P(set.marketing_pct) + " marketing, " + P(set.income_pct) + " income, with " + P(set.income_tax_pct) + " of income set aside for taxes. One-offs come out of savings." +
+    var splitSec = '<section class="rep-sec" id="secSplit"><div class="rep-h"><h2>Budget split</h2>' + (ro() ? "" : '<button class="btn sm" id="budPct">Edit budget</button>') + "</div>" +
+      '<p class="muted rep-sub">Gross profit is what client work brings in after their ad spend and ' + esc((d.partners[0] || {}).name || "partner") + '. Over the bottom line = gross profit minus ' + (fixed != null ? "our bottom line (" + money(fixed) + ")" : "ongoing expenses") + ', split ' + P(set.savings_pct) + " savings, " + P(set.marketing_pct) + " marketing, " + P(set.income_pct) + " income, with " + P(set.income_tax_pct) + " of income set aside for taxes. One-offs come out of savings." +
       (total100 !== 100 ? ' <b class="neg">The split adds up to ' + total100 + "%, not 100%.</b>" : "") + " Months that end below the bottom line split nothing.</p>" +
       '<div class="sheet-wrap"><table class="sheet pl">' + thead.replace("Our expenses", "Budget") + "<tbody>" + splitBody + "</tbody></table></div></section>";
     var sub = "SGS's own expenses by month (the Summary's general expenses). Client ad spend and " + esc((d.partners[0] || {}).name || "partner") + " payouts aren't here: clients pay for those. Ongoing bills are vendors that charge us in two or more months. Open a line to see each vendor." +

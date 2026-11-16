@@ -1,2 +1,3 @@
 -- 2026-11-16 budget_settings (migration "budget_settings"): one row (id 1) with savings_pct 30, marketing_pct 40,
 -- income_pct 30, income_tax_pct 30. RLS: read can_see('finance'); update also can_write(). Used by Finance > Budgets.
+-- 2026-11-16 budget_bottom_line: budget_settings.bottom_line numeric (null = use actual ongoing expenses).
