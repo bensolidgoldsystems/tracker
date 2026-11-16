@@ -676,3 +676,16 @@ label.chk input{width:16px;height:16px;accent-color:var(--gold)}
 .snav .tabs{order:0;width:auto}
 .snav .snav-foot{order:1}
 .snav .brand img,.mbar .brand img{display:block}
+/* Client page: payments by month */
+.pay-panel h2 .pay-tot{font-family:inherit;font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0;text-transform:none}
+.pay-m{border-top:1px solid var(--line)}
+.pay-m:first-of-type{border-top:0}
+.pay-m summary{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;cursor:pointer;list-style:none;font-weight:600}
+.pay-m summary::-webkit-details-marker{display:none}
+.pay-m summary span::before{content:"\25B8";display:inline-block;width:16px;color:var(--faint)}
+.pay-m[open] summary span::before{content:"\25BE"}
+.pay-m summary b{font-variant-numeric:tabular-nums}
+.pay-r{display:flex;justify-content:space-between;gap:12px;padding:6px 0 6px 16px;font-size:14px;font-variant-numeric:tabular-nums}
+.pay-r small{color:var(--muted);font-size:12px}
+.pay-r small.blk{display:block;margin-top:1px}
+.pay-m[open]{padding-bottom:8px}

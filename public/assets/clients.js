@@ -313,6 +313,7 @@
 
       '<div class="layout"><div>' +
         servicesPanel(c, list) +
+        '<div id="clPaid" data-cid="' + c.id + '"></div>' +
         adsPanel(c) +
       "</div><aside>" +
         '<div id="clMoney"></div>' +
@@ -321,7 +322,51 @@
       "</aside></div></div>";
     wireClient(c);
     loadContacts(c);
+    loadPayments(c);
     if (window.SGSReports) { window.SGSReports.clientPanel($("clMoney"), c); }
+  }
+
+  // What the client paid, month by month, and for which services (money_entries: Stripe invoice lines,
+  // pay-per-lead charges and amounts added by hand).
+  var PAID_CATS = { revenue: "Services", per_lead: "Pay per lead", ecom: "Ecom", ad_reimbursement: "Ad spend prepaid", video_shoot: "Video shoot", card_fee: "Card fee covered" };
+  function paidName(e) {
+    var n = String(e.note || "").replace(/^Invoice [A-Z0-9-]+:\s*/i, "").replace(/^3% card fee covered:\s*(Invoice [A-Z0-9-]+:\s*)?/i, "")
+      .replace(/^\d+\s*[×x]\s*/, "").replace(/\s*\(at \$[^)]*\)\s*$/, "").trim();
+    if (e.category === "card_fee") { return "Card fee covered" + (n ? " (" + n + ")" : ""); }
+    if (e.category === "per_lead") { return (e.quantity ? e.quantity + " lead" + (e.quantity === 1 ? "" : "s") : "Leads") + (n && !/lead/i.test(n) ? " · " + n : ""); }
+    if (!n && e.category === "revenue") { return "Services" + (e.source === "sheet" ? " (bookkeeping sheet)" : ""); }
+    return n || PAID_CATS[e.category] || "Payment";
+  }
+  async function loadPayments(c) {
+    var box = $("clPaid"); if (!box) { return; }
+    var rows;
+    try {
+      rows = await q(T.sb.from("money_entries").select("id,category,month,entry_date,amount,note,quantity,payment_method,source")
+        .eq("client_id", c.id).in("category", Object.keys(PAID_CATS)).order("month", { ascending: false }).order("entry_date", { ascending: false, nullsFirst: false }).limit(1000));
+    } catch (e) { box.innerHTML = ""; return; }
+    if (!document.body.contains(box) || box.dataset.cid !== c.id) { return; }
+    if (!rows.length) { box.innerHTML = '<div class="panel"><h2>Payments</h2><p class="muted">No payments recorded yet.</p></div>'; return; }
+    var months = {}, order = [], total = 0;
+    rows.forEach(function (e) {
+      var k = String(e.month).slice(0, 7);
+      if (!months[k]) { months[k] = []; order.push(k); }
+      months[k].push(e); total += Number(e.amount);
+    });
+    function mName(k) { return new Date(k + "-01T12:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" }); }
+    function sum(list) { return list.reduce(function (a, e) { return a + Number(e.amount); }, 0); }
+    box.innerHTML = '<div class="panel pay-panel"><h2>Payments <span class="pay-tot">' + money(total) + " total</span></h2>" +
+      order.map(function (k, i) {
+        var list = months[k];
+        // Same service paid more than once in a month (weekly prepays) is grouped into one line.
+        var by = {}, keys = [];
+        list.forEach(function (e) { var n = paidName(e); if (!by[n]) { by[n] = { n: n, amt: 0, count: 0, dates: [] }; keys.push(n); } by[n].amt += Number(e.amount); by[n].count++; if (e.entry_date) { by[n].dates.push(e.entry_date); } });
+        return '<details class="pay-m"' + (i < 2 ? " open" : "") + "><summary><span>" + esc(mName(k)) + '</span><b>' + money(sum(list)) + "</b></summary>" +
+          keys.map(function (n) {
+            var g = by[n];
+            var when = g.dates.length ? g.dates.sort().map(function (d) { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); }).join(", ") : "";
+            return '<div class="pay-r"><span>' + esc(g.n) + (g.count > 1 ? ' <small>× ' + g.count + "</small>" : "") + (when ? "<small class=\"blk\">" + esc(when) + "</small>" : "") + "</span><span>" + money(Math.round(g.amt * 100) / 100) + "</span></div>";
+          }).join("") + "</details>";
+      }).join("") + "</div>";
   }
 
   function servicesPanel(c, list) {
