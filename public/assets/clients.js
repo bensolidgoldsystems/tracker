@@ -313,13 +313,14 @@
 
       '<div class="layout"><div>' +
         servicesPanel(c, list) +
-        '<div id="clPaid" data-cid="' + c.id + '"></div>' +
         adsPanel(c) +
       "</div><aside>" +
         '<div id="clMoney"></div>' +
         detailsPanel(c, p) +
         contactsPanel(c) +
-      "</aside></div></div>";
+      "</aside></div>" +
+      '<div id="clPaid" class="cl-paid" data-cid="' + c.id + '"></div>' +
+      "</div>";
     wireClient(c);
     loadContacts(c);
     loadPayments(c);
@@ -337,36 +338,60 @@
     if (!n && e.category === "revenue") { return "Services" + (e.source === "sheet" ? " (bookkeeping sheet)" : ""); }
     return n || PAID_CATS[e.category] || "Payment";
   }
+  // Spreadsheet: services down the side, months across the top, one year at a time.
+  function payRowName(e) {
+    if (e.category === "card_fee") { return "Card fees covered"; }
+    if (e.category === "per_lead") { return "Pay per lead"; }
+    if (e.category === "ad_reimbursement") { return "Ad spend prepaid"; }
+    if (e.category === "video_shoot") { return "Video shoot"; }
+    // One row per service: "Intro Pricing Meta Ad Management - 633 Studios" and "SGS - Meta Ad Management Intro Pricing" are both Meta Ad Management.
+    return paidName(e).replace(/\s*-\s*633 Studios?$/i, "").replace(/^SGS\s*-\s*/i, "").replace(/^Intro Pricing\s+|\s+Intro Pricing$/ig, "").trim();
+  }
   async function loadPayments(c) {
     var box = $("clPaid"); if (!box) { return; }
     var rows;
     try {
       rows = await q(T.sb.from("money_entries").select("id,category,month,entry_date,amount,note,quantity,payment_method,source")
-        .eq("client_id", c.id).in("category", Object.keys(PAID_CATS)).order("month", { ascending: false }).order("entry_date", { ascending: false, nullsFirst: false }).limit(1000));
+        .eq("client_id", c.id).in("category", Object.keys(PAID_CATS)).order("month").limit(2000));
     } catch (e) { box.innerHTML = ""; return; }
     if (!document.body.contains(box) || box.dataset.cid !== c.id) { return; }
     if (!rows.length) { box.innerHTML = '<div class="panel"><h2>Payments</h2><p class="muted">No payments recorded yet.</p></div>'; return; }
-    var months = {}, order = [], total = 0;
-    rows.forEach(function (e) {
-      var k = String(e.month).slice(0, 7);
-      if (!months[k]) { months[k] = []; order.push(k); }
-      months[k].push(e); total += Number(e.amount);
-    });
-    function mName(k) { return new Date(k + "-01T12:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" }); }
-    function sum(list) { return list.reduce(function (a, e) { return a + Number(e.amount); }, 0); }
-    box.innerHTML = '<div class="panel pay-panel"><h2>Payments <span class="pay-tot">' + money(total) + " total</span></h2>" +
-      order.map(function (k, i) {
-        var list = months[k];
-        // Same service paid more than once in a month (weekly prepays) is grouped into one line.
-        var by = {}, keys = [];
-        list.forEach(function (e) { var n = paidName(e); if (!by[n]) { by[n] = { n: n, amt: 0, count: 0, dates: [] }; keys.push(n); } by[n].amt += Number(e.amount); by[n].count++; if (e.entry_date) { by[n].dates.push(e.entry_date); } });
-        return '<details class="pay-m"' + (i < 2 ? " open" : "") + "><summary><span>" + esc(mName(k)) + '</span><b>' + money(sum(list)) + "</b></summary>" +
-          keys.map(function (n) {
-            var g = by[n];
-            var when = g.dates.length ? g.dates.sort().map(function (d) { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); }).join(", ") : "";
-            return '<div class="pay-r"><span>' + esc(g.n) + (g.count > 1 ? ' <small>× ' + g.count + "</small>" : "") + (when ? "<small class=\"blk\">" + esc(when) + "</small>" : "") + "</span><span>" + money(Math.round(g.amt * 100) / 100) + "</span></div>";
-          }).join("") + "</details>";
-      }).join("") + "</div>";
+    var years = [], now = new Date(), thisYear = now.getFullYear();
+    rows.forEach(function (e) { var y = +String(e.month).slice(0, 4); if (years.indexOf(y) < 0) { years.push(y); } });
+    years.sort(function (a, b) { return b - a; });
+    var year = years.indexOf(thisYear) >= 0 ? thisYear : years[0];
+    var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    function cell(v) { return v ? money(Math.round(v * 100) / 100) : ""; }
+    function draw() {
+      var list = rows.filter(function (e) { return +String(e.month).slice(0, 4) === year; });
+      var by = {}, names = [], col = MON.map(function () { return 0; });
+      list.forEach(function (e) {
+        var n = payRowName(e), m = +String(e.month).slice(5, 7) - 1, v = Number(e.amount);
+        if (!by[n]) { by[n] = { m: MON.map(function () { return 0; }), leads: 0, first: e.month }; names.push(n); }
+        by[n].m[m] += v; col[m] += v;
+        if (e.category === "per_lead") { by[n].leads += Number(e.quantity || 0); }
+      });
+      // Biggest services first; card fees last.
+      names.sort(function (a, b) {
+        if (a === "Card fees covered") { return 1; } if (b === "Card fees covered") { return -1; }
+        return by[b].m.reduce(function (x, y) { return x + y; }, 0) - by[a].m.reduce(function (x, y) { return x + y; }, 0);
+      });
+      var curM = year === thisYear ? now.getMonth() : -1, total = col.reduce(function (x, y) { return x + y; }, 0);
+      var head = "<colgroup><col class='c-name'>" + MON.map(function () { return "<col>"; }).join("") + "<col class='c-tot'></colgroup>" +
+        "<thead><tr><th class='sticky'>Service</th>" + MON.map(function (m, i) { return "<th" + (i === curM ? " class='now'" : "") + ">" + m + "</th>"; }).join("") + "<th class='tot'>Total</th></tr></thead>";
+      var body = "<tbody>" + names.map(function (n) {
+        var r = by[n], t = r.m.reduce(function (x, y) { return x + y; }, 0);
+        return "<tr><th class='sticky' title='" + esc(n) + "'>" + esc(n) + (r.leads ? " <small class='muted'>(" + r.leads + " leads)</small>" : "") + "</th>" +
+          r.m.map(function (v, i) { return "<td" + (i === curM ? " class='now'" : "") + ">" + cell(v) + "</td>"; }).join("") + "<td class='tot'>" + cell(t) + "</td></tr>";
+      }).join("") + "</tbody>";
+      var foot = "<tfoot><tr><th class='sticky'>Total paid</th>" + col.map(function (v, i) { return "<td" + (i === curM ? " class='now'" : "") + ">" + cell(v) + "</td>"; }).join("") +
+        "<td class='tot'>" + money(Math.round(total * 100) / 100) + "</td></tr></tfoot>";
+      box.innerHTML = '<div class="panel pay-panel"><h2>Payments <span class="pay-head">' +
+        '<select class="inp sm" id="payYear" aria-label="Year">' + years.map(function (y) { return "<option" + (y === year ? " selected" : "") + ">" + y + "</option>"; }).join("") + "</select></span></h2>" +
+        (names.length ? '<div class="sheet-wrap"><table class="sheet pay-sheet">' + head + body + foot + "</table></div>" : '<p class="muted">Nothing paid in ' + year + ".</p>") + "</div>";
+      $("payYear").onchange = function () { year = +this.value; draw(); };
+    }
+    draw();
   }
 
   function servicesPanel(c, list) {
