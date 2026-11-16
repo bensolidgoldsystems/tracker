@@ -1029,7 +1029,8 @@
     set = set || { savings_pct: 30, marketing_pct: 40, income_pct: 30, income_tax_pct: 30 };
     var b = expenseBreakdown(keys), hasQbo = !!(d.pnl && d.pnl.rows && d.pnl.rows.length);
     var n = 0;
-    function cells(v, cents) { return v.map(function (x, j) { return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (x ? money(x, { cents: cents }) : "") + "</td>"; }).join(""); }
+    // Whole dollars: twelve months plus a total are too tight for cents.
+    function cells(v) { return v.map(function (x, j) { x = Math.round(x); return "<td" + (keys[j] === curKey ? " class='now'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join(""); }
     function tot(v) { return Math.round(v.reduce(function (a, c) { return a + c; }, 0) * 100) / 100; }
     function line(name, v, cls, depth, vendors) {
       var t = tot(v), id = "", sub = "";
@@ -1037,11 +1038,11 @@
       if (names.length) {
         id = "bd" + (++n);
         sub = names.map(function (k) {
-          return "<tr class='pl-det hidden' data-of='" + id + "'><th class='sticky' style='padding-left:" + (14 + ((depth || 1) + 1) * 14) + "px' title='" + esc(k) + "'>" + esc(k) + "</th><td class='st'></td>" + cells(vendors[k].map(function (x) { return Math.round(x * 100) / 100; }), true) + "<td class='tot'>" + money(tot(vendors[k]), { cents: true }) + "</td></tr>";
+          return "<tr class='pl-det hidden' data-of='" + id + "'><th class='sticky' style='padding-left:" + (14 + ((depth || 1) + 1) * 14) + "px' title='" + esc(k) + "'>" + esc(k) + "</th><td class='st'></td>" + cells(vendors[k]) + "<td class='tot'>" + money(Math.round(tot(vendors[k]))) + "</td></tr>";
         }).join("");
       }
       return "<tr class='" + (cls || "pl-l") + (id ? " has-det" : "") + "'" + (id ? " data-det='" + id + "' tabindex='0' aria-expanded='false'" : "") + "><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + (id ? "<span class='det-tog' aria-hidden='true'></span>" : "") + esc(name) + "</th><td class='st'></td>" +
-        cells(v) + "<td class='tot'>" + (t ? money(t) : "") + "</td></tr>" + sub;
+        cells(v) + "<td class='tot'>" + (Math.round(t) ? money(Math.round(t)) : "") + "</td></tr>" + sub;
     }
     function head(name) { return "<tr class='pl-h'><th class='sticky' style='padding-left:14px'>" + esc(name) + "</th><td class='st'></td>" + keys.map(function () { return "<td></td>"; }).join("") + "<td class='tot'></td></tr>"; }
     var body = head("Ongoing") +
@@ -1084,8 +1085,8 @@
     function srow(name, v, cls, depth) {
       var t = tot(v);
       return "<tr class='" + (cls || "pl-l") + "'><th class='sticky' style='padding-left:" + (14 + (depth || 1) * 14) + "px'>" + esc(name) + "</th><td class='st'></td>" +
-        v.map(function (x, j) { var c = (keys[j] === curKey ? "now" : "") + (x < 0 ? " neg" : ""); return "<td" + (c.trim() ? " class='" + c.trim() + "'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join("") +
-        "<td class='tot" + (t < 0 ? " neg" : "") + "'>" + (t ? money(t) : "") + "</td></tr>";
+        v.map(function (x, j) { x = Math.round(x); var c = (keys[j] === curKey ? "now" : "") + (x < 0 ? " neg" : ""); return "<td" + (c.trim() ? " class='" + c.trim() + "'" : "") + ">" + (x ? money(x) : "") + "</td>"; }).join("") +
+        "<td class='tot" + (t < 0 ? " neg" : "") + "'>" + (Math.round(t) ? money(Math.round(t)) : "") + "</td></tr>";
     }
     var P = function (v) { return Number(v) + "%"; };
     var splitBody = head("Over the bottom line") +
@@ -1096,7 +1097,7 @@
       srow("Savings (" + P(set.savings_pct) + ")", sp.sav) +
       srow("Marketing (" + P(set.marketing_pct) + ")", sp.mkt) +
       srow("Income (" + P(set.income_pct) + ")", sp.inc) +
-      srow("Set aside for taxes (" + P(set.income_tax_pct) + " of income)", sp.tax, "pl-l", 2) +
+      srow("Taxes (" + P(set.income_tax_pct) + " of income)", sp.tax, "pl-l", 2) +
       srow("Take-home pay", sp.take, "pl-l", 2) +
       head("One-off spending") +
       srow("One-time & other spent", sp.one) +
