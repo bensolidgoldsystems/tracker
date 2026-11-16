@@ -710,4 +710,3 @@ tr.has-det[aria-expanded="true"] .det-tog::before{content:"\25BE";color:var(--go
 .bl-proj .bl-big{border-color:var(--gold-line,rgba(245,216,90,.4));background:rgba(245,216,90,.06)}
 .bl-proj .bl-big b{color:var(--gold);font-size:32px}
 @media (max-width:760px){.bl-proj{grid-template-columns:1fr}}
-.snav .tab.tab-sub{padding-left:28px;font-size:13px}
