@@ -917,7 +917,39 @@
      Ongoing = our ads + software & subscriptions + Stripe fees + other bills from vendors that charge us in
      2+ different months (insurance, bank fees...). Everything else is one-time & other. */
   var SOFTWARE = /software|subscription/i, LABOR = /contract labor|contractor/i;
-  function vendorKey(x) { return String(x[2] || x[3] || x[1] || "").toLowerCase().replace(/[0-9#*]+/g, "").replace(/\s+/g, " ").trim().slice(0, 40); }
+  // A ledger line's vendor: its QuickBooks name, else the bank description ("ORIG CO NAME:OPUS CLIP ORIG ID..."
+  // -> "OPUS CLIP"). Variants of one vendor group on the first word (HighLevel / HIGHLEVEL AGENCY SUB / HIGHLEVEL INC.).
+  function vendorLabel(x) {
+    var n = String(x[2] || "").trim();
+    if (!n) {
+      var m = String(x[3] || "");
+      var co = /ORIG CO NAME:\s*(.+?)\s+(?:ORIG ID|CO ENTRY|DESC DATE|SEC:|IND ID)/i.exec(m);
+      n = (co ? co[1] : m.replace(/\s+/g, " ").split(" ").slice(0, 3).join(" ")).trim() || x[1] || "Other";
+    }
+    return n;
+  }
+  function vendorKey(x) {
+    var first = vendorLabel(x).toLowerCase().replace(/[^a-z0-9. ]/g, " ").trim().split(/\s+/)[0] || "";
+    first = first.replace(/[0-9]+$/, "") || "other";
+    return VENDOR_ALIAS[first] || first;
+  }
+  var VENDOR_ALIAS = { claude: "anthropic", selflessfilms: "selfless" };   // same company, different names on charges
+  // Group ledger lines by vendor: { key: { label, vals[] } }; the label is the name used most (mixed case preferred).
+  function groupVendors(lines, keys) {
+    var g = {};
+    lines.forEach(function (x) {
+      var j = keys.indexOf(x[0].slice(0, 7)); if (j < 0) { return; }
+      var k = vendorKey(x), l = vendorLabel(x);
+      var v = g[k] = g[k] || { names: {}, vals: keys.map(function () { return 0; }), charges: 0 };
+      v.names[l] = (v.names[l] || 0) + 1 + (/[a-z]/.test(l) && /[A-Z]/.test(l) ? 0.5 : 0);
+      v.vals[j] += Number(x[4]); v.charges++;
+    });
+    Object.keys(g).forEach(function (k) {
+      var v = g[k]; v.label = Object.keys(v.names).sort(function (a, b) { return v.names[b] - v.names[a]; })[0];
+      v.vals = v.vals.map(function (n) { return Math.round(n * 100) / 100; });
+    });
+    return g;
+  }
   function expenseBreakdown(keys) {
     var p = d.pnl, cids = Object.keys(d.cell), det = (p && p.details) || {};
     var payouts = keys.map(function (k) { return cids.reduce(function (s, cid) { return s + val(cid, k, "partner_payout"); }, 0); });
@@ -937,17 +969,22 @@
     var soft = keys.map(function (k) {
       var i = col(k); return i < 0 ? 0 : Object.keys(expAccts).filter(function (a) { return SOFTWARE.test(a); }).reduce(function (s, a) { return s + (Number((expAccts[a].values || [])[i]) || 0); }, 0);
     });
-    var vend = { soft: {}, rec: {}, one: {} };   // vendor -> per-month amounts, for the drop-downs
+    var lines = { soft: [], rec: [], one: [] };
     var recur = keys.map(function () { return 0; });
     Object.keys(expAccts).forEach(function (a) {
       if (LABOR.test(a)) { return; }
       (det[a] || []).forEach(function (x) {
         var j = keys.indexOf(x[0].slice(0, 7)); if (j < 0) { return; }
-        var bucket = SOFTWARE.test(a) ? "soft" : recurring(x) ? "rec" : "one", name = x[2] || x[3] || a;
+        var bucket = SOFTWARE.test(a) ? "soft" : recurring(x) ? "rec" : "one";
         if (bucket === "rec") { recur[j] += Number(x[4]); }
-        var vv = vend[bucket][name] = vend[bucket][name] || keys.map(function () { return 0; });
-        vv[j] += Number(x[4]);
+        lines[bucket].push(x);
       });
+    });
+    // vendor label -> per-month amounts, for the drop-downs
+    var vend = {};
+    Object.keys(lines).forEach(function (b) {
+      var g = groupVendors(lines[b], keys); vend[b] = {};
+      Object.keys(g).forEach(function (k) { vend[b][g[k].label] = g[k].vals; });
     });
     var r2 = function (v) { return Math.round(v * 100) / 100; };
     var own = gen.map(function (g) { return g.own; }), fees = gen.map(function (g) { return g.fees; }), total = gen.map(function (g) { return g.total; });
@@ -1041,10 +1078,10 @@
     // Charges behind a QuickBooks expense line (General Ledger), in the months shown.
     function qboCharges(name) {
       var list = (p && p.details && p.details[String(name).split(":").pop().trim()]) || [];
-      return list.filter(function (x) { return keys.indexOf(x[0].slice(0, 7)) >= 0; }).map(function (x) {
-        var who = [x[2], x[3]].filter(Boolean).join(" · ") || x[1] || "Charge";
-        return { label: dateShort(x[0]) + " · " + who, title: [x[1], x[2], x[3]].filter(Boolean).join(" · "), key: x[0].slice(0, 7), v: Number(x[4]) };
-      });
+      // One row per vendor, amounts by month (biggest first), like Finance > Budgets.
+      var g = groupVendors(list, keys);
+      return Object.keys(g).map(function (k) { return { label: g[k].label, title: g[k].label + " · " + g[k].charges + " charge" + (g[k].charges === 1 ? "" : "s"), vals: g[k].vals }; })
+        .sort(function (a, b) { return b.vals.reduce(function (x, y) { return x + y; }, 0) - a.vals.reduce(function (x, y) { return x + y; }, 0); });
     }
     // Tracker lines broken down by client (client ad spend, Stripe fees).
     function byClient(fn) {
@@ -1091,7 +1128,8 @@
       line("Video shoots collected", inc.shoot) + line("Card fees clients covered", inc.cardfee) +
       line("Total income", income, "pl-t", 0) +
       head("Cost of delivery (Tracker)") +
-      line("Client ad spend (Meta)", adSpend, null, null, byClient(spent)) + line("Stripe fees", fees, null, null, stripeFeeCharges()) +
+      line("Client ad spend (Meta)", adSpend, null, null, byClient(spent)) + line("Stripe fees", fees, null, null, byClient(function (cid, k) { return val(cid, k, "stripe_fee"); }).concat(
+        fees.some(Boolean) && val("none", keys[0], "stripe_fee") !== undefined ? [{ label: "Not matched to a client", vals: keys.map(function (k) { return Math.round(val("none", k, "stripe_fee") * 100) / 100; }) }].filter(function (r) { return r.vals.some(Boolean); }) : [])) +
       line("Total cost of delivery", add(adSpend, fees), "pl-t", 0) +
       key("Gross profit", gross) +
       head("Expenses") +
