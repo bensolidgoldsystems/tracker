@@ -346,7 +346,7 @@
       var ppl = perLeadServices(c.id).length;
       var auto = c.billing_autopause !== false && (c.stripe_customer_ids || []).length;
       var what = e.kind === "paused"
-        ? "Ads paused for " + name + " on " + esc(dateShort(e.event_date)) + ". " + (auto ? "Ad billing in Stripe pauses on its own if they're still off on " + esc(dateShort(addDaysStr(e.event_date, 1))) + "." :
+        ? "Ads paused for " + name + " on " + esc(dateShort(e.event_date)) + ". " + (auto ? "Their ad billing in Stripe pauses on its own." :
           price ? "Pause their billing (" + money(price) + "/mo)." : ppl ? "No new leads to bill while paused." : "Pause billing if they have any.")
         : "Ads went live for " + name + " on " + esc(dateShort(e.event_date)) + (e.kind === "relaunched" ? " (back on)" : "") + ". " +
           (e.kind === "relaunched" && auto ? "Ad billing Tracker paused resumes on its own." :

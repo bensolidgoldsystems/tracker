@@ -1,7 +1,7 @@
 // Solid Gold Systems Tracker - pause ad billing while a client's ads are off.
 // Hourly (after meta-sync): for each client with billing_autopause on and not churned, across every Stripe
 // customer linked to the client (their own and the partner's, e.g. "Client - 633 Studios"):
-//   ads off 24 hours+ (latest ads event is paused/stopped 1+ day ago and no campaign is delivering)
+//   ads off (latest ads event is paused/stopped and no campaign is delivering) -> paused right away
 //     -> pause collection on their ad spend prepayment and ad management subscriptions (invoices voided while paused)
 //   ads never went live (no ads events yet, nothing delivering) -> paused right away
 //   a scheduled (not started) ad subscription can't be paused, so while ads aren't live and it would start
@@ -17,7 +17,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = ["https://tracker.solidgoldsystems.com", "https://solidgoldtracker.netlify.app"];
-const OFF_DAYS = 1;
 const AD_SUB = /ad spend|pre ?-?payment|prepay|ad management|ad account management|solid gold system|lead generation/i;
 const NOT_AD = /website|shopify|video|\berp\b/i;
 const ON = ["launched", "relaunched"], OFF = ["paused", "stopped"];
@@ -63,7 +62,6 @@ async function stripe(method: "GET" | "POST", path: string, params: Record<strin
 function nyToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
-function daysBetween(a: string, b: string) { return Math.round((new Date(b + "T12:00:00Z").getTime() - new Date(a + "T12:00:00Z").getTime()) / 864e5); }
 
 // Move a not-started schedule (and every phase) back so it starts a day from now. Stripe needs the
 // phases sent in full, so each phase's items and settings are copied as they are.
@@ -132,8 +130,7 @@ async function run(dry: boolean) {
     if (!cus.length || !acc.length) continue;
     const ev = latest[c.id];
     const live = acc.some((a: string) => delivering[a] === true) || (ev && ON.includes(ev.kind));
-    const offFor = !ev ? 9999 : OFF.includes(ev.kind) ? daysBetween(ev.event_date, today) : -1;
-    const off = !live && offFor >= OFF_DAYS;
+    const off = !live && (!ev || OFF.includes(ev.kind));
     const notLive = !live;
     for (const cu of cus) {
       let subs: any[] = [];
@@ -163,7 +160,7 @@ async function run(dry: boolean) {
         const amount = items.reduce((t: number, it: any) => t + ((it.price && it.price.unit_amount) || 0) * (it.quantity || 1), 0) / 100;
         const mine = !!(s.metadata && s.metadata.sgs_autopaused);
         if (off && !s.pause_collection) {
-          actions.push({ client_id: c.id, client: c.business_name, subscription_id: s.id, action: "paused", amount, reason: ev ? "Ads off " + offFor + " days (since " + ev.event_date + ")" : "Ads haven't gone live yet" });
+          actions.push({ client_id: c.id, client: c.business_name, subscription_id: s.id, action: "paused", amount, reason: ev ? "Ads off since " + ev.event_date : "Ads haven't gone live yet" });
         } else if (live && s.pause_collection && mine) {
           actions.push({ client_id: c.id, client: c.business_name, subscription_id: s.id, action: "resumed", amount, reason: "Ads are live again" });
         }
