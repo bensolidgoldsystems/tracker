@@ -1,7 +1,7 @@
 // Solid Gold Systems Tracker - pause ad billing while a client's ads are off.
 // Hourly (after meta-sync): for each client with billing_autopause on and not churned, across every Stripe
 // customer linked to the client (their own and the partner's, e.g. "Client - 633 Studios"):
-//   ads off 3+ days (latest ads event is paused/stopped 3+ days ago and no campaign is delivering)
+//   ads off 24 hours+ (latest ads event is paused/stopped 1+ day ago and no campaign is delivering)
 //     -> pause collection on their ad spend prepayment and ad management subscriptions (invoices voided while paused)
 //   ads never went live (no ads events yet, nothing delivering) -> paused right away
 //   a scheduled (not started) ad subscription can't be paused, so while ads aren't live and it would start
@@ -17,7 +17,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = ["https://tracker.solidgoldsystems.com", "https://solidgoldtracker.netlify.app"];
-const OFF_DAYS = 3;
+const OFF_DAYS = 1;
 const AD_SUB = /ad spend|pre ?-?payment|prepay|ad management|ad account management|solid gold system|lead generation/i;
 const NOT_AD = /website|shopify|video|\berp\b/i;
 const ON = ["launched", "relaunched"], OFF = ["paused", "stopped"];
