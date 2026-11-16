@@ -386,6 +386,48 @@
     $("adminLink").classList.toggle("on", id === "adminView");
     navOpen(false);
   }
+  // Spreadsheet tables (.sheet): while one is scrolled past, a copy of its month row is pinned to the top
+  // of the screen, below the phone bar and the Finance section links, and follows the table's sideways scroll.
+  (function stickyHeads() {
+    var queued = false;
+    function topOffset() {
+      var t = 0, bar = document.querySelector(".mbar");
+      if (bar && getComputedStyle(bar).display !== "none") { t = bar.getBoundingClientRect().bottom; }
+      var nav = document.querySelector("section:not(.hidden) .rep-nav");
+      if (nav) { var r = nav.getBoundingClientRect(); if (r.top <= t + 1 && r.bottom > t) { t = r.bottom; } }
+      return t;
+    }
+    function update() {
+      queued = false;
+      document.querySelectorAll(".sheet-float").forEach(function (f) { if (!f._table || !document.body.contains(f._table)) { f.remove(); } });
+      var top = topOffset();
+      document.querySelectorAll("table.sheet").forEach(function (t) {
+        var wrap = t.closest(".sheet-wrap"), head = t.tHead;
+        if (!wrap || !head || !t.offsetParent) { if (t._float) { t._float.classList.add("hidden"); } return; }
+        var wr = wrap.getBoundingClientRect(), hr = head.getBoundingClientRect();
+        var show = hr.top < top && wr.bottom > top + hr.height * 2;
+        if (!show) { if (t._float) { t._float.classList.add("hidden"); } return; }
+        var f = t._float;
+        if (!f || f._w !== t.offsetWidth || f._html !== head.innerHTML) {
+          if (f) { f.remove(); }
+          f = document.createElement("div"); f.className = "sheet-float"; f._table = t; f.setAttribute("aria-hidden", "true");
+          var c = document.createElement("table"); c.className = t.className; c.style.width = t.offsetWidth + "px"; c.style.minWidth = "0";
+          var cg = t.querySelector("colgroup"); if (cg) { c.appendChild(cg.cloneNode(true)); }
+          c.appendChild(head.cloneNode(true));
+          f.appendChild(c); document.body.appendChild(f);
+          f._w = t.offsetWidth; f._html = head.innerHTML; t._float = f;
+        }
+        f.classList.remove("hidden");
+        f.style.top = top + "px"; f.style.left = wr.left + "px"; f.style.width = wrap.clientWidth + "px";
+        f.scrollLeft = wrap.scrollLeft;
+      });
+    }
+    function queue() { if (!queued) { queued = true; requestAnimationFrame(update); } }
+    document.addEventListener("scroll", queue, true);   // the page and each table's sideways scroll
+    window.addEventListener("resize", queue);
+    window.addEventListener("hashchange", function () { setTimeout(queue, 50); });
+  })();
+
   // Phone menu: the side menu slides in over the page.
   function navOpen(on) {
     document.body.classList.toggle("nav-open", on);
