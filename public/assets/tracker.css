@@ -708,3 +708,9 @@ tr.has-det[aria-expanded="true"] .det-tog::before{content:"\25BE";color:var(--go
 .bl-proj .bl-big{border-color:var(--gold-line,rgba(245,216,90,.4));background:rgba(245,216,90,.06)}
 .bl-proj .bl-big b{color:var(--gold);font-size:32px}
 @media (max-width:760px){.bl-proj{grid-template-columns:1fr}}
+.bl-proj.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+.bl-proj b.neg{color:var(--bad)}
+.pct-in{display:flex;align-items:center;gap:6px}.pct-in .inp{flex:1}.pct-in span{color:var(--muted)}
+.fld small.muted{display:block;margin-top:4px;font-size:12px}
+@media (max-width:1100px){.bl-proj.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.bl-proj.four{grid-template-columns:1fr}}
