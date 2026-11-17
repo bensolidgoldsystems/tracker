@@ -356,6 +356,16 @@
     });
     // What the automatic ad-billing pause did in Stripe (billing-autopause), until Done.
     (d.billing || []).forEach(function (b) {
+      // New Meta ad accounts the sync found (it gives Tracker access on its own).
+      if (b.action === "meta_found" || b.action === "meta_linked") {
+        var mc = byId(d.clients, b.client_id);
+        var mhtml = b.action === "meta_linked" && mc
+          ? "New Meta ad account <b>" + esc(b.reason) + "</b> found and linked to <a href=\"#client/" + mc.id + "\"><b>" + esc(mc.business_name) + "</b></a>. Spend, leads and auto-pause now work for them."
+          : "New Meta ad account <b>" + esc(b.reason) + "</b> found. Add it to the right client (on their client page, Meta ad account ID: " + esc(b.subscription_id) + ").";
+        items.push({ pri: b.action === "meta_found" ? 0 : 1, cls: "ad-on", html: mhtml +
+          ' <button class="btn sm done-btn" data-bseen="' + b.id + '">Done</button>' });
+        return;
+      }
       var c = byId(d.clients, b.client_id); if (!c) { return; }
       var name = '<a href="#client/' + c.id + '"><b>' + esc(c.business_name) + "</b></a>";
       var amt = b.amount ? " (" + money(b.amount) + ")" : "";

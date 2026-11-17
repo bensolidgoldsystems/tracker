@@ -85,6 +85,74 @@ async function graphAll(path: string, params: Record<string, string>, token: str
   }
   return out;
 }
+async function graphPost(path: string, params: Record<string, string>, token: string) {
+  let res: Response;
+  try {
+    res = await fetch(GRAPH + path, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(params).toString() });
+  } catch (e) { throw new Error(redact("Network error calling Meta: " + ((e as Error).message || e))); }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) {
+    const e = body.error || {};
+    throw new Error(redact((e.message || ("HTTP " + res.status)) + (e.code ? " (code " + e.code + ")" : "")));
+  }
+  return body;
+}
+
+// New client ad accounts and Pages added to the SGS business portfolio: give the Tracker system user
+// access on its own (it's an Admin of the business), so nobody has to "Assign people" by hand.
+const BUSINESS_ID = Deno.env.get("META_BUSINESS_ID") || "1418822920029640";
+async function autoAssign(token: string) {
+  const out = { accounts: [] as string[], pages: [] as string[], problems: [] as string[] };
+  let me = "";
+  try { me = String((await graph("/me", { fields: "id" }, token)).id || ""); }
+  catch (e) { out.problems.push("who am I: " + (e as Error).message); return out; }
+  // Ad accounts.
+  try {
+    const mine = new Set((await graphAll("/me/adaccounts", { fields: "account_id", limit: "200" }, token)).map((a) => String(a.account_id)));
+    const biz: any[] = [];
+    for (const edge of ["owned_ad_accounts", "client_ad_accounts"]) {
+      try { biz.push(...await graphAll("/" + BUSINESS_ID + "/" + edge, { fields: "account_id,name", limit: "200" }, token)); }
+      catch (e) { out.problems.push(edge + ": " + (e as Error).message); }
+    }
+    for (const a of biz) {
+      const id = String(a.account_id || "");
+      if (!id || mine.has(id)) continue;
+      mine.add(id);
+      try { await graphPost("/act_" + id + "/assigned_users", { user: me, tasks: JSON.stringify(["ANALYZE"]), business: BUSINESS_ID }, token); out.accounts.push(a.name || id); }
+      catch (e) { out.problems.push((a.name || id) + ": " + (e as Error).message); }
+    }
+  } catch (e) { out.problems.push("ad accounts: " + (e as Error).message); }
+  // Pages (leads come in through the Page).
+  try {
+    const mine = new Set((await graphAll("/me/accounts", { fields: "id", limit: "100" }, token)).map((p) => String(p.id)));
+    const biz: any[] = [];
+    for (const edge of ["owned_pages", "client_pages"]) {
+      try { biz.push(...await graphAll("/" + BUSINESS_ID + "/" + edge, { fields: "id,name", limit: "100" }, token)); }
+      catch (e) { out.problems.push(edge + ": " + (e as Error).message); }
+    }
+    for (const p of biz) {
+      const id = String(p.id || "");
+      if (!id || mine.has(id)) continue;
+      mine.add(id);
+      try {
+        try { await graphPost("/" + id + "/assigned_users", { user: me, tasks: JSON.stringify(["ADVERTISE", "ANALYZE", "MANAGE_LEADS"]), business: BUSINESS_ID }, token); }
+        catch (_) { await graphPost("/" + id + "/assigned_users", { user: me, tasks: JSON.stringify(["ADVERTISE", "ANALYZE"]), business: BUSINESS_ID }, token); }
+        out.pages.push(p.name || id);
+      } catch (e) { out.problems.push((p.name || id) + ": " + (e as Error).message); }
+    }
+  } catch (e) { out.problems.push("pages: " + (e as Error).message); }
+  return out;
+}
+
+// "Helping-Paw" ~ "Helping PAW", "Middle Island Landscaping " ~ "Middle island landscaping LLC".
+const STOP = /\b(llc|inc|co|corp|company|the|and|of|services?|group|ltd)\b/g;
+function normName(s: string) { return String(s || "").toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9 ]+/g, " ").replace(STOP, " ").replace(/\s+/g, "").trim(); }
+function sameBusiness(a: string, b: string) {
+  const x = normName(a), y = normName(b);
+  if (x.length < 4 || y.length < 4) return false;
+  return x === y || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x)));
+}
+
 function leadCount(actions: any[] | undefined): number {
   const a = actions || [];
   const pick = (t: string) => { const x = a.find((y) => y.action_type === t); return x ? Number(x.value) || 0 : null; };
@@ -349,6 +417,10 @@ async function runSync(trigger: string, sinceOverride?: string) {
   let rows = 0, accounts = 0;
   const problems: string[] = [];
   try {
+    // 0. Give the system user access to any new client ad account or Page in the business.
+    let assigned = { accounts: [] as string[], pages: [] as string[], problems: [] as string[] };
+    try { assigned = await autoAssign(token); } catch (e) { assigned.problems.push(String((e as Error).message || e)); }
+
     // 1. Ad accounts the system user can see, plus any linked on a client in Tracker.
     const seen = await graphAll("/me/adaccounts", { fields: "account_id,name,currency,account_status,business_name", limit: "200" }, token);
     const ids = new Set<string>(seen.map((a) => String(a.account_id)));
@@ -358,7 +430,7 @@ async function runSync(trigger: string, sinceOverride?: string) {
         account_status: a.account_status ?? null, owner_name: a.business_name || "",
       })), { onConflict: "ad_account_id" });
     }
-    const { data: linked } = await db.from("clients").select("id,ad_spend_mode,meta_ad_account_ids");
+    const { data: linked } = await db.from("clients").select("id,business_name,status,ad_spend_mode,meta_ad_account_ids");
     const payer: Record<string, string> = {};   // ad account -> client id, when SGS pays Meta
     const acctClient: Record<string, string> = {};   // ad account -> client id
     for (const c of linked || []) for (const id of c.meta_ad_account_ids || []) {
@@ -366,6 +438,33 @@ async function runSync(trigger: string, sinceOverride?: string) {
       ids.add(id); acctClient[id] = c.id;
       if (/^sgs_/.test(c.ad_spend_mode || "")) payer[id] = c.id;
     }
+    // New ad accounts (first seen this week) that no client has yet: link to the client whose name
+    // matches, or put a note on the Overview so someone links it by hand. Each account gets one note.
+    let autoLinked = 0;
+    try {
+      const { data: fresh } = await db.from("meta_ad_accounts").select("ad_account_id,name,owner_name")
+        .gte("first_seen_at", new Date(Date.now() - 7 * 864e5).toISOString());
+      for (const a of fresh || []) {
+        const id = String(a.ad_account_id);
+        if (acctClient[id] || OWN_ACCOUNTS.includes(id) || !ids.has(id)) continue;
+        const { data: noted } = await db.from("billing_events").select("id").in("action", ["meta_linked", "meta_found"]).eq("subscription_id", id).limit(1);
+        if (noted && noted.length) continue;
+        const hits = (linked || []).filter((c: any) => c.status !== "churned" && (sameBusiness(c.business_name, a.name) || sameBusiness(c.business_name, a.owner_name)));
+        if (hits.length === 1) {
+          const c: any = hits[0];
+          const next = [...new Set([...(c.meta_ad_account_ids || []), id])];
+          const { error } = await db.from("clients").update({ meta_ad_account_ids: next }).eq("id", c.id);
+          if (error) throw error;
+          c.meta_ad_account_ids = next; acctClient[id] = c.id;
+          if (/^sgs_/.test(c.ad_spend_mode || "")) payer[id] = c.id;
+          autoLinked++;
+          await db.from("billing_events").insert({ client_id: c.id, subscription_id: id, action: "meta_linked", reason: a.name || id });
+        } else {
+          await db.from("billing_events").insert({ client_id: null, subscription_id: id, action: "meta_found",
+            reason: (a.name || id) + (hits.length > 1 ? " (matches more than one client)" : "") });
+        }
+      }
+    } catch (e) { problems.push("auto-link: " + String((e as Error).message || e)); }
     let charges = 0;
 
     // 2. Daily spend + leads per account.
@@ -434,7 +533,11 @@ async function runSync(trigger: string, sinceOverride?: string) {
 
     // 4. Individual leads from instant forms.
     const lr = await syncLeads(token, acctClient);
-    const message = (adEvents ? adEvents + " ads on/off change(s). " : "") + (lr.added ? lr.added + " new lead(s). " : "") + (lr.problems.length ? "Leads: " + lr.problems.join(" | ").slice(0, 400) + ". " : "") + (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
+    const message = (assigned.accounts.length ? "Gave Tracker access to new ad account(s): " + assigned.accounts.join(", ") + ". " : "") +
+      (assigned.pages.length ? "Gave Tracker access to new Page(s): " + assigned.pages.join(", ") + ". " : "") +
+      (autoLinked ? autoLinked + " new ad account(s) linked to clients. " : "") +
+      (assigned.problems.length ? "Auto-access: " + assigned.problems.join(" | ").slice(0, 300) + ". " : "") +
+      (adEvents ? adEvents + " ads on/off change(s). " : "") + (lr.added ? lr.added + " new lead(s). " : "") + (lr.problems.length ? "Leads: " + lr.problems.join(" | ").slice(0, 400) + ". " : "") + (charges ? charges + " new card charge(s). " : "") + (problems.length ? problems.length + " account(s) failed: " + problems.join(" | ").slice(0, 850) : "");
     const ok = !problems.length && !lr.problems.length;
     await db.from("meta_sync_runs").update({ finished_at: new Date().toISOString(), ok, accounts, rows, message }).eq("id", run?.id);
     return { ok, configured: true, accounts, rows, message };
