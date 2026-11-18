@@ -62,7 +62,7 @@
     var res = await Promise.all([
       q(T.sb.from("clients").select("id,business_name,status,meta_ad_account_ids").order("business_name")),
       all(function () { return T.sb.from("meta_leads").select("*").order("created_time", { ascending: false }).order("id"); }),
-      all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads").order("day").order("ad_account_id"); }),
+      all(function () { return T.sb.from("meta_daily").select("ad_account_id,day,spend,leads,impressions,clicks").order("day").order("ad_account_id"); }),
       q(T.sb.from("meta_pages").select("*")),
       q(T.sb.from("meta_sync_runs").select("started_at,ok,message").order("started_at", { ascending: false }).limit(1)),
       all(function () { return T.sb.from("ghl_contacts").select("*").or("is_sgs.eq.true,client_id.not.is.null").order("date_added", { ascending: false }).order("id"); }).catch(function () { return []; }),
@@ -119,19 +119,21 @@
     var leads = c ? (d.byClient[c.id] || []) : d.unmatched;
     var listed = leads.filter(function (l) { return l._day >= w[0] && l._day <= w[1]; });
     var r = listed.filter(function (l) { return !l.voided_at; });   // voided leads are listed but not counted
-    var spend = 0, metaCount = 0, byDay = {};
+    var spend = 0, metaCount = 0, impr = 0, clicks = 0, byDay = {};
     accts.forEach(function (a) {
       (d.byAcct[a] || []).forEach(function (x) {
         if (!between(x.day, w)) { return; }
         spend += Number(x.spend || 0); metaCount += Number(x.leads || 0);
-        var b = byDay[x.day] || (byDay[x.day] = { spend: 0, meta: 0 });
+        impr += Number(x.impressions || 0); clicks += Number(x.clicks || 0);
+        var b = byDay[x.day] || (byDay[x.day] = { spend: 0, meta: 0, impr: 0, clicks: 0 });
         b.spend += Number(x.spend || 0); b.meta += Number(x.leads || 0);
+        b.impr += Number(x.impressions || 0); b.clicks += Number(x.clicks || 0);
       });
     });
     // Meta's count also includes leads from website forms, which aren't listed here; voided leads come off it.
     metaCount = Math.max(0, metaCount - (listed.length - r.length));
     var total = Math.max(r.length, metaCount);
-    return { all: leads, listed: listed, inRange: r, spend: spend, metaCount: metaCount, total: total, cpl: total && spend ? spend / total : null, byDay: byDay, last: leads[0] ? leads[0].created_time : null };
+    return { all: leads, listed: listed, inRange: r, spend: spend, metaCount: metaCount, impr: impr, clicks: clicks, total: total, cpl: total && spend ? spend / total : null, byDay: byDay, last: leads[0] ? leads[0].created_time : null };
   }
 
   var routeGen = 0;
@@ -256,6 +258,7 @@
         (c ? stat("Ad spend", money2(s.spend), "In this range") + stat("Cost per lead", s.cpl != null ? money2(s.cpl) : "—", "") : "") +
         stat("Last 7 days", week, "Leads listed") +
       "</div>" +
+      (c ? adStats(s) : "") +
       '<div class="board-bar al-bar"><input class="inp search" id="alQ" type="search" placeholder="Search name, phone, email, answers..." value="' + esc(view.q) + '" aria-label="Search leads">' +
         '<span class="spacer"></span><button class="btn sm" id="alCsv"' + (list.length ? "" : " disabled") + ">Download CSV</button>" +
         (c ? '<button class="btn sm gold" id="alPdf">Client report (PDF)</button>' : "") + "</div>" +
@@ -287,6 +290,32 @@
     });
     $("alCsv").onclick = function () { downloadCsv(c, list); };
     if (c) { $("alPdf").onclick = function () { reportDialog(c); }; }
+  }
+
+  function num(n) { return Number(n || 0).toLocaleString("en-US"); }
+  function pct(n) { return (Math.round(n * 1000) / 10).toFixed(1) + "%"; }
+  /* Impressions, clicks and the rates Meta reports, plus a day-by-day sheet (newest first). */
+  function adStats(s) {
+    if (!s.impr && !s.clicks && !s.spend) { return ""; }
+    var days = Object.keys(s.byDay).sort().reverse().filter(function (k) { var b = s.byDay[k]; return b.spend || b.impr || b.clicks || b.meta; });
+    var leadsByDay = {};
+    s.inRange.forEach(function (l) { leadsByDay[l._day] = (leadsByDay[l._day] || 0) + 1; });
+    function rate(a, b, f) { return b ? f(a / b) : "—"; }
+    return '<div class="stats">' +
+        stat("Impressions", num(s.impr), "Times the ads were shown") +
+        stat("Clicks", num(s.clicks), "All clicks on the ads") +
+        stat("Click rate (CTR)", rate(s.clicks, s.impr, pct), "Clicks ÷ impressions") +
+        stat("Cost per click", rate(s.spend, s.clicks, money2), "") +
+        stat("Cost per 1,000 views", rate(s.spend * 1000, s.impr, money2), "CPM") +
+        stat("Lead rate", rate(s.total, s.clicks, pct), "Leads ÷ clicks") +
+      "</div>" +
+      (days.length ? '<details class="panel al-days"><summary><b>Day by day</b> <small class="muted">' + days.length + " day" + (days.length === 1 ? "" : "s") + " with ad activity</small></summary>" +
+        '<div class="sheet-wrap scroll-block"><table class="sheet al-day-sheet"><thead><tr><th class="sticky">Day</th><th>Spend</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>CPC</th><th>Leads</th><th>Cost per lead</th></tr></thead><tbody>' +
+        days.map(function (k) {
+          var b = s.byDay[k], n = Math.max(b.meta, leadsByDay[k] || 0);
+          return "<tr><th class='sticky'>" + esc(longDate(k)) + "</th><td>" + money2(b.spend) + "</td><td>" + num(b.impr) + "</td><td>" + num(b.clicks) + "</td><td>" +
+            rate(b.clicks, b.impr, pct) + "</td><td>" + rate(b.spend, b.clicks, money2) + "</td><td>" + (n || "") + "</td><td>" + (n ? money2(b.spend / n) : "—") + "</td></tr>";
+        }).join("") + "</tbody></table></div></details>" : "");
   }
 
   function leadRow(l, unmatched) {
